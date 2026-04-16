@@ -61,6 +61,11 @@ select = [
 [tool.ruff.lint.isort]
 known-first-party = ["tad"]
 
+[tool.ruff.lint.per-file-ignores]
+# FastAPI idiomatically uses Depends()/Query() in argument defaults.
+"src/tad/api/*.py" = ["B008"]
+"tests/**/*.py" = ["B008"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true

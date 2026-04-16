@@ -1,712 +1,285 @@
-# Trailing Arm Detection -- Implementation Plan
+# Trailing Arm Detection -- Implementation Plan (Demo Path)
 
-> **Status**: Draft | **Created**: 2026-04-16 | **Greenfield**: yes (no `src/` exists yet)
+> **Status**: Phases 0-3 complete; Phases 4-7 scoped for the demo deliverable.
+> **Last updated**: 2026-04-17
 >
-> This plan covers the end-to-end build from an empty repo to a production-ready
-> service + frontend. Each phase is independently shippable and testable.
-> Do not skip phases -- each one builds on the last.
+> This plan covers the build from greenfield to a working, tested,
+> demo-ready backend + frontend that satisfies the P0 user stories in
+> `docs/user_stories.txt` and the measurement accuracy targets in
+> `docs/trd_doc.txt`.
+>
+> Phases 0-3 have been delivered and tested; they are summarised here
+> for traceability and are **not re-executed**. Phases 4-7 are the
+> remaining demo work, consolidated from the original 17-phase plan
+> so one engineer can ship the demo in a small number of focused
+> iterations.
 
 ---
 
-## Phase 0 -- Project Scaffold & Dev Environment
+## Phases 0-3 -- COMPLETED
 
-**Goal**: A repo that builds, lints, tests (empty), and serves a health endpoint.
+| Phase | Scope | Branch / Commit | Test coverage |
+|-------|-------|-----------------|---------------|
+| **0** | Project scaffold, Docker, Makefile, CI workflow, `/v1/health` | `master` (commit 709c43f) | repo builds, `/v1/health` returns 200 |
+| **1** | Config layer: Settings, AlgoParams, Calibration, `/v1/ready` | `master` (commit 709c43f) | 12 unit tests |
+| **2** | Data layer: filename parser, image validator, safe read, domain errors | `phase-02/data-layer-v1` (commit bc2617a) | 39 unit tests |
+| **3** | Measurement pipeline (contour + masked Hough, ADR-008, `algo-1.3.0`) | `phase-03/contour-detection-v2` (commit e1dca17) | 45 unit tests; validated on real images cam18jdleofhtlhj6 pair |
 
-### Deliverables
-- Git repo initialised with `.gitignore`, `.env.example`
-- `pyproject.toml` with all pinned backend dependencies (see CLAUDE.md tech stack)
-- `Makefile` with all targets listed in CLAUDE.md (up, down, migrate, serve, test, lint, format, build, etc.)
-- `docker-compose.yml` for local Postgres + MinIO
-- `Dockerfile` (multi-stage: Node 20 for frontend build + Python 3.11 for backend)
-- `.pre-commit-config.yaml` with ruff + mypy hooks
-- `ruff.toml` / `pyproject.toml` ruff section (line-length 100, import order)
-- Minimal FastAPI app at `src/tad/main.py` with `/v1/health` returning `200`
-- `src/tad/__init__.py`
-- `.github/workflows/ci-backend.yml` (ruff + mypy + pytest placeholder)
-- ADR directory: `docs/decisions/ADR-001.md` (classical CV only)
-- `CLAUDE.md` committed (already exists, may need path adjustments for `backend/` vs flat layout)
+**Total**: **96 unit tests passing**, ruff + mypy clean on 27 source files.
 
-### Files to Create
-```
-pyproject.toml
-Makefile
-Dockerfile
-docker-compose.yml
-.gitignore
-.env.example
-.pre-commit-config.yaml
-src/tad/__init__.py
-src/tad/main.py
-docs/decisions/ADR-001.md
-.github/workflows/ci-backend.yml
-```
-
-### Test Gate
-- [ ] `make lint` passes (ruff + mypy on empty `src/tad/`)
-- [ ] `make test` passes (pytest discovers zero tests, exits 0)
-- [ ] `make up` starts Postgres + MinIO containers
-- [ ] `curl http://localhost:8000/v1/health` returns `200`
-- [ ] CI workflow is green on push
+Key outputs from Phase 3:
+- `src/tad/measurement/` contains the full pure CV pipeline.
+- `configs/algo_params/algo-1.3.0.yaml` is the active algorithm version.
+- `docs/decisions/ADR-008.md` records the switch from the earlier Canny+RANSAC approach.
+- Real-image smoke test: both cameras measure the bushing at ~20 mm with 0.4 mm asymmetry.
 
 ---
 
-## Phase 1 -- Configuration Layer
+## Phase 4 -- Backend API + Storage + Sessions
 
-**Goal**: Settings, AlgoParams, and Calibration models load, validate, and are tested.
+**Goal**: The full backend is running. Start a session by HTTP, drop image pairs into the watched folders, and see per-camera and per-chassis events stream out over SSE with rows landing in Postgres and debug JPEGs in MinIO.
 
-### Deliverables
-- `src/tad/config/__init__.py`
-- `src/tad/config/settings.py` -- Pydantic Settings reading `.env`
-- `src/tad/config/algo_params.py` -- `AlgoParams` Pydantic model + `load_algo_params(version)` loader
-- `src/tad/config/calibration.py` -- `Calibration` Pydantic model + `load_calibration(path)` loader
-- `configs/algo_params/algo-1.2.0.yaml` -- initial algo params (from TRD Section 11)
-- `configs/calibration/cal-2026-03-14-L.yaml` -- left camera calibration
-- `configs/calibration/cal-2026-03-14-R.yaml` -- right camera calibration
-- `/v1/ready` endpoint -- returns 200 only when both calibrations load and both image dirs exist
-
-### Files to Create
-```
-src/tad/config/__init__.py
-src/tad/config/settings.py
-src/tad/config/algo_params.py
-src/tad/config/calibration.py
-configs/algo_params/algo-1.2.0.yaml
-configs/calibration/cal-2026-03-14-L.yaml
-configs/calibration/cal-2026-03-14-R.yaml
-tests/unit/test_settings.py
-tests/unit/test_algo_params.py
-tests/unit/test_calibration.py
-```
-
-### Test Gate
-- [ ] Unit tests cover: valid load, missing file, bad YAML, camera-side mismatch
-- [ ] `make test-unit` green
-- [ ] `/v1/ready` returns 503 when calibration is missing, 200 when present
-
----
-
-## Phase 2 -- Data Layer (Filename Parser + Image Validator + Safe Read)
-
-**Goal**: Pure functions that parse filenames and validate images, fully tested.
+This phase consolidates the original Phases 4-9: persistence, aggregator, SSE broker, folder watchers, consumer loop, session manager, API routes, and basic observability.
 
 ### Deliverables
-- `src/tad/data/__init__.py`
-- `src/tad/data/filename_parser.py` -- `FILENAME_RE`, `ParsedName`, `parse_filename()`
-- `src/tad/data/image_validator.py` -- `validate_image()` with all gates (resolution, blur, exposure, integrity)
-- `src/tad/data/safe_read.py` -- `wait_for_stable()` async size-stability loop
-- `src/tad/api/errors.py` -- domain exceptions: `BadFilename`, `ImageQualityError`, etc.
-- Test fixture images under `tests/fixtures/images/` (valid L/R pair, plus deliberately bad images)
-- Test fixture calibration YAMLs under `tests/fixtures/calibration/`
 
-### Files to Create
+**Persistence** (`src/tad/persistence/`)
+- `db.py` -- async SQLAlchemy engine + session maker
+- `models.py` -- SQLAlchemy mapped classes for `sessions`, `measurements`, `chassis_records`, `calibrations`
+- `repositories.py` -- `SessionRepository`, `MeasurementRepository`, `ChassisRepository` (async)
+- `blob_store.py` -- `DebugImageStore` backed by MinIO
+- `migrations/versions/001_initial_schema.py` -- Alembic migration creating the four tables (client-side UUIDs, TIMESTAMPTZ, indexes per TRD Section 5)
+
+**Session machinery** (`src/tad/sessions/`)
+- `aggregator.py` -- `Aggregator` with the TRD 7.1 status matrix and the `somewhat_ok_band_mm > asymmetry_threshold_mm` downgrade
+- `broker.py` -- `SseBroker` with slow-subscriber drop (no back-pressure to producer)
+- `watcher.py` -- `FolderWatcher` over `watchdog`, bridging via `loop.call_soon_threadsafe`
+- `consumer.py` -- `process_item()` pipeline: safe_read -> parse_filename -> validate_image -> `asyncio.to_thread(measure_innermost_diameter)` -> upload debug blob -> insert measurement -> publish SSE -> `aggregator.accept`
+- `runtime.py` -- `SessionRuntime` dataclass holding per-session state
+- `manager.py` -- `SessionManager` with `start()` / `stop()` / `require_active()`
+
+**API** (`src/tad/api/`)
+- `app.py` -- FastAPI factory with lifespan, error-envelope handler, request-ID middleware
+- `deps.py` -- `Depends()` wiring
+- `schemas.py` -- all Pydantic request/response models
+- `routes_sessions.py` -- `POST /v1/sessions/start`, `POST /v1/sessions/{id}/stop`, `GET /v1/sessions/{id}/events` (SSE), `GET /v1/sessions/{id}/results`
+- `routes_chassis.py` -- `GET /v1/chassis`, `GET /v1/chassis/{id}`, `POST /v1/chassis/{id}/decision`, `POST /v1/chassis/{id}/flag`
+- `routes_dashboard.py` -- `GET /v1/dashboard/summary`
+- `routes_measurements.py` -- `GET /v1/measurements/{id}`, `GET /v1/debug/{id}`
+- Health/ready routes (already exist, extend `/ready` to include DB + MinIO checks)
+
+**Observability** (`src/tad/observability/`)
+- `logging_conf.py` -- `structlog` JSON config with chassis-number hashing at info level
+- Request-ID middleware (generated, logged, returned in `X-Request-Id`)
+- Defer Prometheus metrics to Phase 7 unless trivially free
+
+### Files to create
 ```
-src/tad/data/__init__.py
-src/tad/data/filename_parser.py
-src/tad/data/image_validator.py
-src/tad/data/safe_read.py
-src/tad/api/__init__.py
-src/tad/api/errors.py
-tests/unit/test_filename_parser.py
-tests/unit/test_image_validator.py
-tests/unit/test_safe_read.py
-tests/fixtures/images/MALBB51BLPM123456_L.jpg
-tests/fixtures/images/MALBB51BLPM123456_R.jpg
-tests/fixtures/images/bad_name.jpg
-tests/fixtures/images/truncated.jpg
-tests/fixtures/images/blurry.jpg
-tests/fixtures/calibration/cal-test-L.yaml
-tests/fixtures/calibration/cal-test-R.yaml
-```
-
-### Test Gate
-- [ ] 100% branch coverage on `filename_parser.py` and `image_validator.py`
-- [ ] Valid filenames parse correctly; invalid ones raise `BadFilename`
-- [ ] All image quality gates (resolution, blur, exposure, integrity) have positive and negative test cases
-- [ ] `make test-unit` green
-
----
-
-## Phase 3 -- Measurement Pipeline (Offline, Pure CV)
-
-**Goal**: A function that takes an image + calibration + algo_params and returns a diameter in mm. No I/O, no DB, no sessions. This is the heart of the system.
-
-**Approach**: `algo-1.3.0` — see [ADR-008](docs/decisions/ADR-008.md). The pipeline is target-driven: the operator passes a known expected diameter (e.g. 47.25 mm), and the detector only accepts circles whose radius falls in `target_diameter_mm ± radius_tolerance_mm`. This eliminates the phantom-circle problem seen with the original Canny+RANSAC pipeline on real images.
-
-### Deliverables
-- `src/tad/measurement/__init__.py`
-- `src/tad/measurement/models.py` -- `PipelineInput`, `PipelineOutput`, `InnerCircle` (frozen dataclasses)
-- `src/tad/measurement/preprocessing.py` -- `gaussian_blur()`
-- `src/tad/measurement/threshold.py` -- `adaptive_threshold()`, `morph_close()`
-- `src/tad/measurement/contour_detect.py` -- `find_candidate_contours()`, `detect_circle_in_contour()`, `detect_circle()`
-- `src/tad/measurement/confidence.py` -- `compute_confidence()`, `evaluate_status()` (band-based)
-- `src/tad/measurement/annotate.py` -- `render_debug_image()` with target reference circle
-- `src/tad/measurement/pipeline.py` -- `measure_innermost_diameter()` orchestrator
-- `src/tad/measurement/__main__.py` -- CLI entry point
-- `configs/algo_params/algo-1.3.0.yaml` -- new parameter schema
-
-### Files to Create
-```
-src/tad/measurement/__init__.py
-src/tad/measurement/models.py
-src/tad/measurement/preprocessing.py
-src/tad/measurement/threshold.py
-src/tad/measurement/contour_detect.py
-src/tad/measurement/confidence.py
-src/tad/measurement/annotate.py
-src/tad/measurement/pipeline.py
-src/tad/measurement/__main__.py
-configs/algo_params/algo-1.3.0.yaml
-tests/unit/test_preprocessing.py
-tests/unit/test_threshold.py
-tests/unit/test_contour_detect.py
-tests/unit/test_confidence.py
-tests/unit/test_pipeline.py
-```
-
-### Test Gate
-- [ ] On fixture images, measured diameter matches target within `somewhat_ok_band_mm`
-- [ ] Determinism: same image + params -> identical output (no stochastic sampling)
-- [ ] `detect_circle` walks contours largest-first and rejects circles outside the target radius band
-- [ ] `ERR_NO_CIRCLE` returned when no contour yields a matching circle
-- [ ] Band classification covers every leg of the status matrix (PASS / REVIEW / FAIL / ERROR)
-- [ ] `make test-unit` green
-- [ ] Pipeline CLI runs end-to-end on a fixture image and emits a debug JPG
-
----
-
-## Phase 4 -- Persistence Layer (Postgres + MinIO)
-
-**Goal**: Rows in Postgres, blobs in MinIO, round-trip tested.
-
-### Deliverables
-- `src/tad/persistence/__init__.py`
-- `src/tad/persistence/db.py` -- async SQLAlchemy engine factory, session maker
-- `src/tad/persistence/models.py` -- SQLAlchemy mapped classes (sessions, measurements, chassis_records, calibrations)
-- `src/tad/persistence/repositories.py` -- `SessionRepository`, `MeasurementRepository`, `ChassisRepository`
-- `src/tad/persistence/blob_store.py` -- `DebugImageStore` (MinIO put/stream)
-- `src/tad/persistence/migrations/` -- Alembic setup
-- `src/tad/persistence/migrations/versions/001_initial_schema.py` -- all 4 tables (DDL from architecture.txt Section 7)
-
-### Files to Create
-```
-src/tad/persistence/__init__.py
-src/tad/persistence/db.py
-src/tad/persistence/models.py
-src/tad/persistence/repositories.py
-src/tad/persistence/blob_store.py
+src/tad/persistence/{db,models,repositories,blob_store}.py
 src/tad/persistence/migrations/env.py
-src/tad/persistence/migrations/script.py.mako
 src/tad/persistence/migrations/versions/001_initial_schema.py
 alembic.ini
-tests/integration/__init__.py
+src/tad/sessions/{aggregator,broker,watcher,consumer,runtime,manager}.py
+src/tad/api/{app,deps,schemas,middleware}.py
+src/tad/api/routes_{sessions,chassis,dashboard,measurements}.py
+src/tad/observability/logging_conf.py
+scripts/seed_db.py
+tests/unit/test_aggregator.py
+tests/unit/test_broker.py
 tests/integration/test_repositories.py
 tests/integration/test_blob_store.py
-scripts/seed_db.py
-```
-
-### Test Gate
-- [ ] `make up && make migrate` creates all 4 tables in Postgres
-- [ ] Integration test: insert and read a Session, Measurement, ChassisRecord round-trip
-- [ ] Integration test: put and stream a debug image through MinIO round-trip
-- [ ] All IDs are client-side UUIDs, all timestamps are TIMESTAMPTZ in UTC
-- [ ] `make test-integration` green (requires `make up`)
-
----
-
-## Phase 5 -- Chassis Aggregator
-
-**Goal**: Given two per-camera measurements, produce a chassis record with the correct overall status.
-
-### Deliverables
-- `src/tad/sessions/__init__.py`
-- `src/tad/sessions/aggregator.py` -- `Aggregator` class with `accept()` and `flush()`
-- Status matrix implementation (TRD Section 7.1)
-- Asymmetry threshold downgrade logic
-
-### Files to Create
-```
-src/tad/sessions/__init__.py
-src/tad/sessions/aggregator.py
-tests/unit/test_aggregator.py
-```
-
-### Test Gate
-- [ ] Every cell of the 4x4 status matrix is covered by a unit test
-- [ ] Asymmetry threshold downgrade: PASS -> REVIEW when asymmetry > threshold
-- [ ] `flush()` emits REVIEW with "missing side: L" or "missing side: R" for orphans
-- [ ] Concurrency: aggregator handles rapid `accept()` calls safely
-- [ ] `make test-unit` green
-
----
-
-## Phase 6 -- SSE Event Broker
-
-**Goal**: Per-session fan-out of events to connected dashboards, with slow-subscriber protection.
-
-### Deliverables
-- `src/tad/sessions/broker.py` -- `SseBroker` class (subscribe/unsubscribe/publish)
-- `src/tad/api/sse.py` -- SSE streaming route helper
-- Event types: `session_opened`, `camera_result`, `chassis_result`, `warning`, `session_closed`
-
-### Files to Create
-```
-src/tad/sessions/broker.py
-src/tad/api/sse.py
-tests/unit/test_broker.py
-tests/integration/test_api_sse.py
-```
-
-### Test Gate
-- [ ] Two concurrent subscribers both receive the same published event
-- [ ] A slow subscriber (full queue) is dropped, not blocking the producer
-- [ ] Unsubscribe cleans up correctly
-- [ ] SSE route streams events in the correct `event: <type>\ndata: <json>` format
-- [ ] `make test-unit` and `make test-integration` green
-
----
-
-## Phase 7 -- Folder Watchers + Consumer Loop
-
-**Goal**: Dropping a file into `/tmp/tad/images/left/` triggers the full pipeline (validate -> parse -> measure -> persist -> publish -> aggregate).
-
-### Deliverables
-- `src/tad/sessions/watcher.py` -- `FolderWatcher` using watchdog + `loop.call_soon_threadsafe`
-- `src/tad/sessions/consumer.py` -- `process_item()` loop (safe-read -> validate -> parse -> measure via `asyncio.to_thread` -> upload debug image -> insert measurement -> publish camera_result -> aggregator.accept)
-- `src/tad/sessions/runtime.py` -- `SessionRuntime` dataclass (holds queue, watchers, aggregator, broker, algo_params, calibrations)
-
-### Files to Create
-```
-src/tad/sessions/watcher.py
-src/tad/sessions/consumer.py
-src/tad/sessions/runtime.py
-tests/integration/test_watcher.py
-tests/integration/test_consumer.py
-```
-
-### Test Gate
-- [ ] Integration test: drop a fixture image into a temp directory -> watcher enqueues it -> consumer processes it -> measurement row exists in DB -> SSE event was published
-- [ ] Safe-read protocol handles partially written files (size changes between checks)
-- [ ] Bad filenames produce `warning` events, not crashes
-- [ ] Already-seen files (same path + mtime) are deduplicated
-- [ ] `make test-integration` green
-
----
-
-## Phase 8 -- Session Manager + API Routes
-
-**Goal**: Full session lifecycle (start -> process images -> stop) behind HTTP endpoints.
-
-### Deliverables
-- `src/tad/sessions/manager.py` -- `SessionManager` class (start, stop, require_active)
-- `src/tad/api/app.py` -- FastAPI application factory with lifespan, middleware, exception handlers
-- `src/tad/api/deps.py` -- FastAPI `Depends()` wiring for session manager, repos, etc.
-- `src/tad/api/schemas.py` -- all Pydantic request/response models (StartRequest, StartResponse, StopResponse, CameraResultEvent, ChassisResultEvent, ErrorEnvelope, etc.)
-- `src/tad/api/routes_sessions.py` -- `POST /v1/sessions/start`, `POST /v1/sessions/{id}/stop`, `GET /v1/sessions/{id}/events` (SSE), `GET /v1/sessions/{id}/results` (polling fallback)
-- `src/tad/api/routes_measurements.py` -- `GET /v1/measurements/{id}`, `GET /v1/debug/{id}`
-- `src/tad/api/routes_health.py` -- `GET /v1/health`, `GET /v1/ready`
-- `src/tad/api/routes_chassis.py` -- `GET /v1/chassis`, `GET /v1/chassis/{id}`, `POST /v1/chassis/{id}/decision`, `POST /v1/chassis/{id}/flag`
-- `src/tad/api/routes_dashboard.py` -- `GET /v1/dashboard/summary`
-- Request ID middleware (generates `X-Request-Id`, binds to structlog)
-- Error envelope handler mapping domain exceptions to `ERR_*` codes
-
-### Files to Create
-```
-src/tad/sessions/manager.py
-src/tad/api/app.py
-src/tad/api/deps.py
-src/tad/api/schemas.py
-src/tad/api/routes_sessions.py
-src/tad/api/routes_measurements.py
-src/tad/api/routes_health.py
-src/tad/api/routes_chassis.py
-src/tad/api/routes_dashboard.py
-src/tad/api/middleware.py
 tests/integration/test_session_flow.py
 tests/integration/test_api_routes.py
 ```
 
-### Test Gate
-- [ ] End-to-end curl walkthrough works: start session -> drop fixture images -> events stream -> stop session with summary
-- [ ] `POST /start` returns 201 with full session metadata
-- [ ] `POST /start` when already active returns error (no duplicate sessions)
-- [ ] `POST /stop` flushes orphans and returns summary
-- [ ] `GET /chassis` returns paginated chassis records with filters (status, shift, date range, search)
-- [ ] `GET /chassis/{id}` returns both per-camera measurements
-- [ ] `POST /chassis/{id}/decision` records operator decision
-- [ ] `POST /chassis/{id}/flag` toggles flagged state
-- [ ] `GET /dashboard/summary` returns KPI cards, trend, and recent alerts
-- [ ] `GET /debug/{id}` streams the annotated JPEG
-- [ ] Error envelope: no stack traces reach the client; all errors have `error_code` + `request_id`
-- [ ] `make test-integration` green
-- [ ] `make serve` works with `--reload`
+### Test gate
+- [ ] `make up && make migrate` creates all four tables.
+- [ ] Unit tests cover every cell of the status matrix, the asymmetry downgrade, orphan flush, and slow-subscriber drop.
+- [ ] Integration test: `POST /start` -> drop two fixture images -> receive `camera_result` x2 + `chassis_result` x1 over SSE -> `POST /stop` returns a summary with `pass/review/fail/error` counts.
+- [ ] `GET /v1/chassis?status=...&page=1` and `GET /v1/chassis/{id}` return the documented shapes (TRD 8.4, 8.5).
+- [ ] `POST /v1/chassis/{id}/decision` and `/flag` persist and round-trip.
+- [ ] `GET /v1/dashboard/summary` returns the KPI payload (TRD 8.8).
+- [ ] `GET /v1/debug/{id}` streams the annotated JPEG.
+- [ ] Error envelope: every non-2xx returns `{error_code, error_message, request_id}`; no stack traces ever reach the client.
+- [ ] `make test` green (unit + integration).
+
+### Maps to user stories / TRD
+US-01, US-02, US-03, US-06, US-07, US-08, US-09, US-10, US-11 (missing-side highlight in events), US-18 (bad-filename warnings). TRD Sections 5, 7, 8, 9.
 
 ---
 
-## Phase 9 -- Observability
+## Phase 5 -- Frontend Application
 
-**Goal**: Production-readiness hygiene -- structured logging, metrics, request tracing.
+**Goal**: Operators can open the browser, see the dashboard light up in real time, click a row, and use the violation detail page. No mock data anywhere.
 
-### Deliverables
-- `src/tad/observability/__init__.py`
-- `src/tad/observability/logging_conf.py` -- structlog configuration (JSON output, context binding for session_id, measurement_id, chassis_no, camera_side)
-- `src/tad/observability/metrics.py` -- Prometheus collectors:
-  - `images_processed_total{side, status}`
-  - `chassis_results_total{status}`
-  - `warnings_total{reason}`
-  - `image_latency_seconds{side}`
-  - `confidence_score{side}`
-  - `diameter_mm{side}`
-  - `asymmetry_mm`
-  - `sessions_active`
-  - `pending_chassis_count{session_id}`
-- `/metrics` endpoint for Prometheus scraping
-- Chassis number hashing for info/warn logs (plaintext only in debug)
-
-### Files to Create
-```
-src/tad/observability/__init__.py
-src/tad/observability/logging_conf.py
-src/tad/observability/metrics.py
-tests/unit/test_logging_conf.py
-tests/unit/test_metrics.py
-```
-
-### Test Gate
-- [ ] All log records carry `session_id`, `measurement_id`, `chassis_no` (hashed at info level), `camera_side`
-- [ ] `/metrics` returns Prometheus-format text with all declared collectors
-- [ ] `X-Request-Id` is generated, logged, and returned in response headers
-- [ ] `make test-unit` green
-
----
-
-## Phase 10 -- Eval Harness
-
-**Goal**: A locked evaluation set with a pass/fail gate for any change to the measurement pipeline or algo_params.
+This phase consolidates the original Phases 12-15.
 
 ### Deliverables
-- `src/tad/evals/__init__.py`
-- `src/tad/evals/eval.py` -- eval runner that loads the dataset, runs pipeline, computes MAE / P95 / max error
-- `src/tad/evals/metrics.py` -- metric computation helpers
-- `tests/eval/dataset.csv` -- locked eval set (chassis_no, image_path, side, caliper_mm)
-- `scripts/validate_algo_params.py` -- promotion script that enforces eval gate + ADR check
-- `.github/workflows/eval.yml` -- runs on every PR touching `src/tad/measurement/` or `configs/algo_params/`
 
-### Files to Create
+**Scaffold** (`frontend/`)
+- `package.json` with pinned deps (TRD 10.2): React 18.3, Vite 5.4, Tailwind 3.4, Recharts 2.12, React Router 6.26, @tanstack/react-table 8.20, Axios 1.7, lucide-react 0.441, @headlessui/react 2.1, date-fns 3.6, TypeScript 5.5
+- `vite.config.ts` with `/v1` proxy to `:8000`
+- `tailwind.config.ts`, `tsconfig.json`, `postcss.config.cjs`, `index.html`
+- `src/main.tsx`, `src/App.tsx`, `src/routes.ts`
+- `src/labels.ts` -- single source of truth for status/camera UI labels (TRD 10.3)
+
+**Shared components** (`frontend/src/components/`)
+- `Header.tsx` (shared nav, "Live View"/"Settings" as placeholders for v1)
+- `StatusPill.tsx` (uses `labels.ts`)
+
+**API layer** (`frontend/src/api/` + `hooks/`)
+- `client.ts` -- Axios instance
+- `dashboard.ts`, `chassis.ts`, `sessions.ts`, `sse.ts`
+- `useLiveSession.ts` -- EventSource wrapper, reconnects with backoff, tracks last event + connected state
+- `useChassisList.ts` -- paged chassis list with filters
+- `SessionContext` in `App.tsx`
+
+**Dashboard page** (`frontend/src/pages/Dashboard.tsx`)
+- `KpiDonut.tsx` (Recharts PieChart - Violations Today)
+- `KpiTrend.tsx` (Recharts LineChart - Violation Trend, two lines)
+- `AlertsList.tsx` (clickable, navigates to detail)
+- `FiltersBar.tsx` (Today / Past 7 Days / Date Range, shift, condition, search, CSV export)
+- `ProductionTable.tsx` (@tanstack/react-table, sortable, clickable rows)
+- `Pagination.tsx`
+- Live wiring: on `chassis_result`, prepend row and refetch KPI summary
+- Empty state: "Waiting for the first chassis. Session started at HH:MM..."
+
+**Violation Detail page** (`frontend/src/pages/ViolationDetail.tsx`)
+- `CameraCard.tsx` -- Cam1/Cam2 header, debug image (lazy load), condition pill, Correct/Incorrect decision buttons
+- `DetailPanel.tsx` -- KV list, Flagged toggle, Download button (JSON bundle in v1)
+
+### Files to create
 ```
-src/tad/evals/__init__.py
-src/tad/evals/eval.py
-src/tad/evals/metrics.py
-tests/eval/dataset.csv
-scripts/validate_algo_params.py
-.github/workflows/eval.yml
-```
-
-### Test Gate
-- [ ] `make eval` runs end-to-end and produces a report with MAE, P95, max error
-- [ ] Current pipeline meets accuracy targets: MAE <= 0.05 mm, P95 <= 0.10 mm, max <= 0.20 mm
-- [ ] A deliberate regression (bad algo_params) fails the eval gate
-- [ ] Eval workflow triggers on PRs touching measurement code
-- [ ] `make eval` is green
-
----
-
-## Phase 11 -- Backend Hardening & Release Prep
-
-**Goal**: The backend is production-ready -- graceful shutdown, error hardening, Docker finalization.
-
-### Deliverables
-- Graceful shutdown via Uvicorn lifespan events (SIGTERM -> stop all active sessions with drain budget)
-- Idempotency guard: `(session_id, absolute_path, file_mtime)` dedup in consumer
-- Error envelope standardisation (consistent `ERR_*` codes across all routes)
-- Dockerfile finalised: non-root user, healthcheck instruction, multi-stage (Node 20 + Python 3.11)
-- `scripts/replay_session.py` -- replay a set of images through the service for staging validation
-- `scripts/run_calibration.py` -- calibration script stub
-- `.github/workflows/cd.yml` -- on tag push, builds and pushes Docker image
-
-### Files to Create
-```
-scripts/replay_session.py
-scripts/run_calibration.py
-.github/workflows/cd.yml
-```
-
-### Test Gate
-- [ ] SIGTERM during an active session: in-flight items complete, orphans are flushed, SSE stream closes cleanly
-- [ ] Duplicate image (same path + mtime) produces a debug log, not a second measurement
-- [ ] Docker image builds and starts with `make build`
-- [ ] `docker compose up` (full stack) runs the service end-to-end
-- [ ] Replay script processes a set of fixture images and produces expected results
-
----
-
-## Phase 12 -- Frontend Scaffold
-
-**Goal**: A React SPA that builds, routes between two pages, and renders a shared header.
-
-### Deliverables
-- `frontend/package.json` with all pinned frontend dependencies (React 18.3, Vite 5.4, Tailwind 3.4, Recharts 2.12, React Router DOM 6.26, @tanstack/react-table 8.20, Axios 1.7, lucide-react 0.441, @headlessui/react 2.1, date-fns 3.6, TypeScript 5.5)
-- `frontend/vite.config.ts` with API proxy to `:8000`
-- `frontend/tailwind.config.ts`, `frontend/postcss.config.cjs`
-- `frontend/tsconfig.json`
-- `frontend/index.html`
-- `frontend/src/main.tsx` -- ReactDOM.createRoot
-- `frontend/src/App.tsx` -- BrowserRouter + routes
-- `frontend/src/routes.ts` -- route constants
-- `frontend/src/labels.ts` -- status/camera terminology mapping (single source of truth)
-- `frontend/src/styles/index.css` -- Tailwind base
-- `frontend/src/pages/Dashboard.tsx` -- skeleton
-- `frontend/src/pages/ViolationDetail.tsx` -- skeleton
-- `frontend/src/components/Header.tsx` -- logo + nav tabs (Home active, Live View disabled, Settings disabled) + user menu
-- `frontend/src/components/StatusPill.tsx` -- status label + colour + icon mapping
-- Makefile target: `make dev-ui` (Vite dev server on :5173)
-- `.github/workflows/ci-frontend.yml` (ESLint + Prettier + Vitest + Vite build)
-
-### Files to Create
-```
-frontend/package.json
-frontend/vite.config.ts
-frontend/tailwind.config.ts
-frontend/postcss.config.cjs
-frontend/tsconfig.json
-frontend/index.html
-frontend/src/main.tsx
-frontend/src/App.tsx
-frontend/src/routes.ts
-frontend/src/labels.ts
+frontend/package.json, vite.config.ts, tailwind.config.ts, tsconfig.json,
+  postcss.config.cjs, index.html
+frontend/src/{main.tsx,App.tsx,routes.ts,labels.ts}
 frontend/src/styles/index.css
-frontend/src/pages/Dashboard.tsx
-frontend/src/pages/ViolationDetail.tsx
-frontend/src/components/Header.tsx
-frontend/src/components/StatusPill.tsx
-frontend/tests/unit/labels.test.ts
+frontend/src/components/{Header,StatusPill,KpiDonut,KpiTrend,AlertsList,
+  FiltersBar,ProductionTable,Pagination,CameraCard,DetailPanel}.tsx
+frontend/src/pages/{Dashboard,ViolationDetail}.tsx
+frontend/src/api/{client,dashboard,chassis,sessions,sse}.ts
+frontend/src/hooks/{useLiveSession,useChassisList}.ts
+frontend/tests/unit/{labels,StatusPill,KpiDonut}.test.ts
 .github/workflows/ci-frontend.yml
 ```
 
-### Test Gate
-- [ ] `cd frontend && npm install && npm run dev` starts Vite on :5173
-- [ ] `/home` renders the Dashboard skeleton with the header
-- [ ] `/home/details/123` renders the ViolationDetail skeleton with the header
-- [ ] `/` redirects to `/home`
-- [ ] Unknown routes show NotFound
-- [ ] `StatusPill` renders correct label + colour for each status (unit test)
-- [ ] `labels.ts` maps PASS->Okay, REVIEW->Somewhat Okay, FAIL->Not Okay, ERROR->Error
-- [ ] `npm run build` produces a static bundle in `/dist`
-- [ ] CI frontend workflow green
+### Test gate
+- [ ] `cd frontend && npm install && npm run dev` boots Vite on :5173.
+- [ ] `/home` renders the full Dashboard with live data coming from a running backend.
+- [ ] Dropping image pairs into the watched folders prepends rows to the Production Details table within ~500 ms.
+- [ ] KPI cards refresh when a `chassis_result` event arrives.
+- [ ] Row click navigates to `/home/details/:id` and both camera images load from `/v1/debug/...`.
+- [ ] Correct / Incorrect buttons POST to `/v1/chassis/{id}/decision` and the UI reflects the chosen state.
+- [ ] Flagged toggle and JSON download both work.
+- [ ] Vitest component tests for StatusPill (PASS/REVIEW/FAIL/ERROR -> correct label + colour) and KpiDonut pass.
+- [ ] `npm run build` produces a static bundle in `frontend/dist`.
+
+### Maps to user stories / TRD
+US-02, US-04, US-05 (UI side), US-12, US-19. TRD Section 10 (Frontend Architecture).
 
 ---
 
-## Phase 13 -- Frontend API Layer + SSE Hook
+## Phase 6 -- End-to-End Integration + Demo Readiness
 
-**Goal**: API client modules and the SSE subscription hook that powers real-time updates.
+**Goal**: One Docker image ships both services, the demo walkthrough runs cleanly on a fresh clone, and at least one Playwright flow proves the whole pipeline.
+
+This phase consolidates the original Phases 10, 11, 16.
 
 ### Deliverables
-- `frontend/src/api/client.ts` -- Axios instance with base URL
-- `frontend/src/api/dashboard.ts` -- `GET /v1/dashboard/summary`, `GET /v1/chassis` (list)
-- `frontend/src/api/chassis.ts` -- `GET /v1/chassis/{id}`, `POST decision`, `POST flag`
-- `frontend/src/api/sessions.ts` -- start/stop, get active session
-- `frontend/src/api/sse.ts` -- EventSource wrapper with reconnect logic
-- `frontend/src/hooks/useLiveSession.ts` -- connects to SSE, exposes `lastEvent` and `connected` state
-- `frontend/src/hooks/useChassisList.ts` -- fetches and paginates chassis list
-- `SessionContext` in App.tsx -- provides live session state to all components
 
-### Files to Create
-```
-frontend/src/api/client.ts
-frontend/src/api/dashboard.ts
-frontend/src/api/chassis.ts
-frontend/src/api/sessions.ts
-frontend/src/api/sse.ts
-frontend/src/hooks/useLiveSession.ts
-frontend/src/hooks/useChassisList.ts
-frontend/tests/unit/api.test.ts
-```
+**Same-origin deployment**
+- Backend serves `frontend/dist/` from `/` with SPA fallback.
+- `/v1/*` stays reserved for the API.
 
-### Test Gate
-- [ ] API client modules type-check against the documented response shapes
-- [ ] SSE hook reconnects with backoff on disconnect
-- [ ] SSE hook parses `camera_result`, `chassis_result`, `warning`, `session_closed` events
-- [ ] Vitest green
+**Docker**
+- `Dockerfile` finalised: multi-stage build (Node 20 -> Python 3.11-slim), non-root user, healthcheck on `/v1/ready`.
+- `docker-compose.yml` production-like stack (Postgres + MinIO + tad service + mounted image folders).
+- `make build` produces a tagged image.
 
----
+**Minimal eval harness** (P0 slice only; the full locked-set runner stays on the backlog)
+- `src/tad/evals/eval.py` -- reads `tests/eval/dataset.csv` (seeded with the two real-image fixtures), runs the pipeline, computes MAE / P95 / max error, prints a report.
+- `make eval` target.
 
-## Phase 14 -- Dashboard Page (Full Implementation)
+**Smoke tests**
+- Playwright: (a) Dashboard loads, table populates, row click opens detail page; (b) Detail page renders both camera images and records a decision.
+- `scripts/replay_session.py` -- drops a fixture pair into the watched folders for manual demo runs.
 
-**Goal**: The Dashboard at `/home` is fully functional with KPI cards, trend chart, alerts, and the Production Details table -- all updating live via SSE.
+**Docs**
+- `docs/api.md` -- curl walkthrough for each P0 route.
+- `README.md` -- "Run the demo in 5 minutes" section:
+  1. `cp .env.example .env`
+  2. `make up && make migrate`
+  3. `make serve` (backend) and `make dev-ui` (frontend) -- or `make build && docker run ...`
+  4. `python scripts/replay_session.py`
+  5. Open `http://localhost:8000/home` and watch rows appear.
 
-### Deliverables
-- `frontend/src/components/KpiDonut.tsx` -- Recharts PieChart (Violations Today)
-- `frontend/src/components/KpiTrend.tsx` -- Recharts LineChart (Violation Trend, two lines)
-- `frontend/src/components/AlertsList.tsx` -- Recent Alerts (clickable -> detail page)
-- `frontend/src/components/FiltersBar.tsx` -- date range (Today/Past 7 Days/Date Range), shift, condition, search, export
-- `frontend/src/components/ProductionTable.tsx` -- @tanstack/react-table with sorting + pagination
-- `frontend/src/components/Pagination.tsx` -- page size selector + prev/next
-- Dashboard page wired:
-  - On mount, fetch dashboard summary + chassis list
-  - Discover active session -> subscribe SSE
-  - On `chassis_result`: prepend row to table, refetch KPI cards
-  - On `session_closed`: close EventSource, show static data
-- Empty state: "Waiting for the first chassis. Session started at HH:MM..."
-- Status columns use StatusPill component
-- Table rows clickable -> navigate to `/home/details/:id`
+### Test gate
+- [ ] `make build` produces a single image that serves the Dashboard at `http://localhost:8000/home`.
+- [ ] Full walkthrough in the README works on a fresh clone.
+- [ ] Both Playwright flows pass.
+- [ ] `make eval` produces a report.
+- [ ] All backend unit + integration tests still green.
+- [ ] No CORS errors, no dev-only URLs in the built bundle.
 
-### Files to Create
-```
-frontend/src/components/KpiDonut.tsx
-frontend/src/components/KpiTrend.tsx
-frontend/src/components/AlertsList.tsx
-frontend/src/components/FiltersBar.tsx
-frontend/src/components/ProductionTable.tsx
-frontend/src/components/Pagination.tsx
-```
-
-### Test Gate
-- [ ] Dashboard renders KPI cards with data from `/v1/dashboard/summary`
-- [ ] Production Details table populates from `/v1/chassis`
-- [ ] Table sorting works (by timestamp, status)
-- [ ] Pagination works (page size, prev/next)
-- [ ] Filters (status, shift, date range, search) update the table
-- [ ] SSE events prepend new rows to the table in real time
-- [ ] Clicking a row navigates to `/home/details/:id`
-- [ ] Empty state renders correctly when no data
-- [ ] Vitest unit tests for KpiDonut, KpiTrend, StatusPill, FilterBar
+### Maps to user stories / TRD
+US-09 (OpenAPI spec exposed), US-28 (auto-reconnect via the existing SSE hook). TRD Sections 10.11, 15 (infrastructure), 18 (testing).
 
 ---
 
-## Phase 15 -- Violation Detail Page (Full Implementation)
+## Phase 7 -- (Optional) Production Hardening
 
-**Goal**: The Violation Detail page at `/home/details/:id` shows both camera images, conditions, operator decision buttons, and the detail panel.
+**Goal**: Deploy-ready, not just demo-ready. Execute **only** after the demo lands.
 
-### Deliverables
-- `frontend/src/components/CameraCard.tsx` -- debug image + condition + Correct/Incorrect buttons
-- `frontend/src/components/DetailPanel.tsx` -- KV list (Product ID, Overall Condition, Timestamp, Shift, Area) + Flagged toggle + Download button
-- ViolationDetail page wired:
-  - Back button navigates to `/home`
-  - Fetches `GET /v1/chassis/{id}` on mount
-  - Renders two CameraCards (Cam1, Cam2) side by side
-  - Decision buttons POST to `/v1/chassis/{id}/decision`
-  - Flag toggle POSTs to `/v1/chassis/{id}/flag`
-  - Download button fetches JSON bundle (v1)
-- Debug images loaded from `/v1/debug/{measurement_id}` with lazy load + fallback placeholder
+Scope pulled from the original Phases 9, 11, 17 (the parts that are *not* required for a demo):
 
-### Files to Create
-```
-frontend/src/components/CameraCard.tsx
-frontend/src/components/DetailPanel.tsx
-```
+- Full `structlog` + `/metrics` Prometheus instrumentation (TRD Section 20 monitoring).
+- Graceful shutdown under SIGTERM with in-flight drain.
+- Idempotency guard on `(session_id, path, mtime)`.
+- mTLS + `X-Service-Token` + `AUTH_ENABLED` plumbing.
+- Calibration promotion workflow + `scripts/run_calibration.py`.
+- CI/CD: `cd.yml` tag-push pipeline, staging replay gate.
+- Admin panel (US-22), CSV export (US-14), shift/weekly rollups (US-13), calibration-health indicator (US-21).
+- Full locked eval harness with fail-on-regression CI gate (TRD Section 18.1).
 
-### Test Gate
-- [ ] Detail page renders both camera cards with images
-- [ ] Condition status shown per camera using StatusPill
-- [ ] Correct/Incorrect buttons POST decision and update UI
-- [ ] Flag toggle works and persists
-- [ ] Back button returns to Dashboard
-- [ ] Missing debug image shows fallback placeholder
-- [ ] Vitest component tests for CameraCard and DetailPanel
+None of this blocks the demo. Split into its own TRD-driven iteration.
 
 ---
 
-## Phase 16 -- Full Integration + E2E Testing
-
-**Goal**: Backend + frontend work together end-to-end. Playwright smoke tests pass.
-
-### Deliverables
-- Backend serves frontend `/dist` at root `/` path (static file mount in FastAPI or nginx)
-- Vite build integrated into Docker multi-stage build
-- Playwright E2E smoke tests:
-  - Flow A: Dashboard loads -> table populates -> row click navigates to detail page
-  - Flow B: Violation Detail renders both camera images -> decision can be recorded
-- Full curl walkthrough documented in `docs/api.md`
-
-### Files to Create
-```
-frontend/tests/e2e/dashboard.spec.ts
-frontend/tests/e2e/violation-detail.spec.ts
-frontend/playwright.config.ts
-docs/api.md
-```
-
-### Test Gate
-- [ ] `make build` produces a single Docker image with both backend + frontend
-- [ ] Docker image starts and serves the Dashboard at `http://localhost:8000/home`
-- [ ] API calls from the frontend work without CORS issues (same-origin)
-- [ ] Playwright Flow A passes
-- [ ] Playwright Flow B passes
-- [ ] `make test` (backend) + `npm test` (frontend) all green
-- [ ] Full end-to-end: start session -> drop images -> see results in Dashboard -> click row -> see detail page -> record decision
-
----
-
-## Phase 17 -- Production Hardening & Deployment
-
-**Goal**: Ready for staging deployment and production rollout.
-
-### Deliverables
-- Finalised `Dockerfile` (multi-stage, non-root user, healthcheck)
-- Production `docker-compose.yml` template (from architecture.txt Section 14)
-- `scripts/replay_session.py` tested against staging
-- Graceful shutdown verified under load
-- Security review: mTLS config documented, `AUTH_ENABLED` toggle, no PII in logs, no secrets logged
-- Documentation updated: `docs/trd_doc.txt` (if any deviations), `CLAUDE.md`, `docs/api.md`
-- Git tags + CD pipeline tested
-
-### Files to Create
-```
-docker-compose.prod.yml
-docs/runbook.md
-```
-
-### Test Gate
-- [ ] Staging deploy: `docker compose up` with production-like config
-- [ ] Replay script processes a day of images with expected accuracy
-- [ ] `make eval` meets all accuracy targets (MAE <= 0.05 mm)
-- [ ] Graceful shutdown: SIGTERM during active session completes cleanly
-- [ ] `/v1/ready` returns 200 only when all dependencies are healthy
-- [ ] No secrets in logs, no stack traces to clients
-- [ ] CI/CD pipeline: tag push -> build -> push image -> deploy to staging
-
----
-
-## Summary: Phase Dependencies
+## Phase summary
 
 ```
-Phase  0: Scaffold          (no deps)
-Phase  1: Config            (depends on 0)
-Phase  2: Data Layer        (depends on 0)
-Phase  3: CV Pipeline       (depends on 1, 2)
-Phase  4: Persistence       (depends on 0)
-Phase  5: Aggregator        (depends on 4)
-Phase  6: SSE Broker        (depends on 0)
-Phase  7: Watchers+Consumer (depends on 2, 3, 4, 5, 6)
-Phase  8: Session+API       (depends on 5, 6, 7)
-Phase  9: Observability     (depends on 8)
-Phase 10: Eval Harness      (depends on 3)
-Phase 11: Backend Hardening (depends on 8, 9, 10)
-Phase 12: Frontend Scaffold (depends on 0)
-Phase 13: Frontend API+SSE  (depends on 12)
-Phase 14: Dashboard         (depends on 13)
-Phase 15: Violation Detail  (depends on 13)
-Phase 16: Integration+E2E  (depends on 11, 14, 15)
-Phase 17: Production        (depends on 16)
+COMPLETED:
+  Phase 0 -- Scaffold
+  Phase 1 -- Config
+  Phase 2 -- Data layer
+  Phase 3 -- Measurement pipeline (algo-1.3.0, ADR-008)
+
+DEMO PATH:
+  Phase 4 -- Backend API + Storage + Sessions      [~backend only]
+  Phase 5 -- Frontend Application                  [~frontend only]
+  Phase 6 -- E2E Integration + Demo Readiness      [the ship]
+
+OPTIONAL LATER:
+  Phase 7 -- Production Hardening
 ```
 
-**Parallelization opportunities**:
-- Phases 1, 2, 4 can run in parallel after Phase 0
-- Phases 5, 6 can run in parallel after Phase 4
-- Phase 10 can start as soon as Phase 3 is done (parallel with 4-9)
-- Phases 12-15 (frontend) can start as soon as Phase 0 is done and run in parallel with backend phases, but full integration (Phase 16) requires Phase 11
+### Parallelisation
 
----
+- Phase 4 and Phase 5 can run in parallel once Phase 4's API schemas (`schemas.py`) are stubbed -- frontend can develop against a mocked backend (MSW) while backend finishes the routes.
+- Phase 6 requires both.
 
-## User Story Mapping
+### P0 user-story coverage after demo
 
-| Phase | P0 Stories Covered | P1 Stories Enabled |
-|-------|-------------------|-------------------|
-| 0-1   | US-09 (API contract, partial) | -- |
-| 2     | US-18 (bad filenames) | -- |
-| 3     | Core of US-02, US-03 (measurement) | -- |
-| 4-5   | US-07, US-08 (traceability) | -- |
-| 6-8   | US-01, US-02, US-03, US-06, US-09, US-10 | US-11, US-12, US-28 |
-| 9     | -- | -- |
-| 10    | -- | US-17 (algo_params promotion) |
-| 12-15 | US-04, US-05 (UI) | US-19, US-14, US-15, US-16 |
-| 16-17 | All P0 complete | Ready for P1 sprint |
+All P0 stories from `docs/user_stories.txt` are covered by the end of Phase 6:
+
+- US-01 Start -> Phase 4
+- US-02 Live feed -> Phases 4 + 5
+- US-03 Chassis aggregate -> Phase 4
+- US-04 Status at a glance -> Phase 5
+- US-05 Annotated image -> Phases 4 + 5
+- US-06 Stop + summary -> Phase 4
+- US-07 Chassis lookup -> Phase 4
+- US-08 Traceability -> Phase 4 (already pinned from Phase 3 in the schema)
+- US-09 Documented API -> Phases 4 + 6
+- US-10 Start-failure handling -> Phase 4 + 5
+- US-18 Bad-filename warnings -> Phases 4 + 5
