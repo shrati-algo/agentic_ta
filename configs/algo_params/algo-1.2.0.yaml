@@ -1,0 +1,29 @@
+version: "algo-1.2.0"
+clahe:
+  clip_limit: 2.0
+  tile_grid_size: [8, 8]
+blur:
+  kernel: 5
+canny:
+  lower_ratio: 0.66
+  upper_ratio: 1.33
+hough:
+  dp: 1.2
+  min_dist: 40
+  param1: 100
+  param2: 30
+  min_radius_px: 40
+  max_radius_px: 160
+center_region:
+  inner_fraction: 0.7
+ransac:
+  iterations: 200
+  inlier_threshold_px: 1.0
+  seed: 42
+confidence:
+  conf_pass: 0.85
+  conf_review: 0.60
+tolerance:
+  min_mm: 47.000
+  max_mm: 47.500
+  asymmetry_threshold_mm: 0.15

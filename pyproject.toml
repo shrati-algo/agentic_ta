@@ -1,0 +1,87 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tad"
+version = "0.1.0"
+description = "Trailing Arm Detection — classical CV dimensional measurement service"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0,<0.116",
+    "uvicorn[standard]>=0.32.0,<0.33",
+    "sse-starlette>=2.1.0,<2.2",
+    "opencv-python>=4.10.0",
+    "numpy>=1.26.0",
+    "scikit-image>=0.24.0",
+    "watchdog>=5.0.0,<5.1",
+    "sqlalchemy[asyncio]>=2.0.0,<2.1",
+    "psycopg[binary]>=3.2.0,<3.3",
+    "minio>=7.2.0,<7.3",
+    "pydantic>=2.9.0,<2.10",
+    "pydantic-settings>=2.0.0,<3",
+    "PyYAML>=6.0,<7",
+    "structlog",
+    "prometheus-client",
+    "alembic",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0,<8.4",
+    "pytest-asyncio",
+    "pytest-cov>=5.0.0,<5.1",
+    "hypothesis",
+    "httpx",
+    "ruff>=0.7.0,<0.8",
+    "mypy>=1.13.0,<1.14",
+    "types-PyYAML",
+    "pre-commit",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tad"]
+
+[tool.ruff]
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tad"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+mypy_path = "src"
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+    "cv2.*",
+    "minio.*",
+    "watchdog.*",
+    "prometheus_client.*",
+    "skimage.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: tests that need Postgres/MinIO (deselect with -m 'not integration')",
+]

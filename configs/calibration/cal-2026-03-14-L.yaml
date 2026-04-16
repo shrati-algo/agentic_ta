@@ -1,0 +1,7 @@
+calibration_id: "cal-2026-03-14-L"
+camera_side: "L"
+mm_per_px: 0.082340
+method: "checkerboard"
+valid_from: "2026-03-14T09:00:00Z"
+operator: "qa-technician-12"
+reference_image: "configs/calibration/images/cal-2026-03-14-L.jpg"
