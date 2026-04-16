@@ -1,0 +1,1860 @@
+================================================================================
+                                                                                
+                      END-TO-END SYSTEM ARCHITECTURE                            
+                                                                                
+                        TRAILING ARM DETECTION                                  
+              Developer Implementation Guide (build from zero)                  
+                                                                                
+================================================================================
+
+  AUDIENCE      :  A developer (or small team) building this system from
+                   scratch. Assumes Python, FastAPI, and OpenCV literacy.
+  COMPANIONS    :  Use Case Document UC-TAD-001  |  TRD v2.0  |  PRD v1.0
+  VERSION       :  1.0  (Draft)
+  READING ORDER :  Sections 1 -> 4 first (the mental model), then 5 -> 13
+                   as you actually implement, then 14 -> 17 as you harden.
+
+
+
+================================================================================
+  HOW TO READ THIS DOCUMENT
+================================================================================
+
+  This is an architecture-first build guide. It tells you:
+
+     - what components exist
+     - what each component owns
+     - how components talk to each other
+     - what the interfaces look like in code
+     - the order to implement them
+     - how to test and deploy each piece
+
+  It does NOT re-state the TRD's requirements or SLAs. When in doubt,
+  the TRD is authoritative on "what must be true", this document is
+  authoritative on "how to build it".
+
+  Every code sketch in this document is illustrative — production code
+  will have more error handling, logging, and tests. Use the sketches
+  to anchor your mental model, not as copy-paste.
+
+
+
++------------------------------------------------------------------------------+
+|                            TABLE OF CONTENTS                                 |
++------------------------------------------------------------------------------+
+
+   1.  System at a Glance
+   2.  Tech Stack
+   3.  Component Architecture
+   4.  Runtime Model (Processes, Threads, Async)
+   5.  Component Deep Dives
+         5.1  Configuration Layer
+         5.2  Persistence Layer
+         5.3  Calibration Loader
+         5.4  Filename Parser
+         5.5  Image Validator
+         5.6  Measurement Engine (the CV pipeline)
+         5.7  Chassis Aggregator
+         5.8  Folder Watchers
+         5.9  Session Manager
+         5.10 API Layer (FastAPI)
+         5.11 SSE Event Broker
+   6.  Data Flow Sequences
+   7.  Database Schema (SQL DDL)
+   8.  Directory Structure
+   9.  Key Interfaces (Python Signatures)
+  10.  Configuration File Formats
+  11.  Local Development Setup
+  12.  Implementation Roadmap (build order)
+  13.  Testing Strategy (per component)
+  14.  Deployment Architecture
+  15.  Observability and Operational Runbook
+  16.  Cross-Cutting Concerns
+  17.  Appendix — Code Sketches for Tricky Bits
+
+
+
+================================================================================
+  1. SYSTEM AT A GLANCE
+================================================================================
+
+  The system is a single Python service — one Docker container — that
+  exposes a FastAPI HTTP interface and owns two background tasks per
+  active session (one folder watcher per camera). Everything runs in a
+  single process; concurrency is handled by asyncio plus a small thread
+  pool for CPU-bound CV work.
+
+  There are four external systems the service talks to:
+
+      - Frontend / Dashboard  (HTTP + Server-Sent Events)
+      - Two image folders     (shared filesystem, read-only)
+      - Postgres              (structured records)
+      - MinIO (S3-compatible) (debug image blobs)
+
+
+  +----------------------------------------------------------------------+
+  |                     SYSTEM AT A GLANCE                               |
+  +----------------------------------------------------------------------+
+
+          +-------------------+                +-------------------+
+          |  Frontend / UI    |                |  Capture System   |
+          |  (browser on      |                |  (writes images   |
+          |  station tablet)  |                |   to folders)     |
+          +---------+---------+                +---------+---------+
+                    |                                    |
+                    |  HTTP + SSE                        |  filesystem
+                    v                                    v
+          +---------------------------------------------------------+
+          |                      CV Service                         |
+          |                                                         |
+          |    +------------+   +----------------+   +-----------+  |
+          |    | API Layer  |-->| Session Mgr    |-->| Folder    |  |
+          |    | (FastAPI)  |   |                |   | Watchers  |  |
+          |    +------------+   +--------+-------+   +-----+-----+  |
+          |          ^                   |                 |        |
+          |          |                   v                 v        |
+          |    +-----+------+    +---------------+   +-----------+  |
+          |    | SSE Broker |<---| Aggregator    |<--| Pipeline  |  |
+          |    +------------+    +---------------+   +-----------+  |
+          |                              |                 |        |
+          |                              v                 v        |
+          |                        +---------------------------+    |
+          |                        |    Persistence Layer      |    |
+          |                        +---------------------------+    |
+          +---------------------------------------------------------+
+                               |                 |
+                               v                 v
+                       +--------------+   +-------------+
+                       |  Postgres    |   |  MinIO      |
+                       |  (records)   |   |  (blobs)    |
+                       +--------------+   +-------------+
+
+
+  THE MENTAL MODEL IN ONE SENTENCE
+  --------------------------------
+     When Start is called, two folder watchers spin up; each image they
+     find flows through a deterministic CV pipeline, the result is
+     saved, and an event is pushed to every connected dashboard — in
+     parallel, the aggregator is listening for matched L/R pairs and
+     emits a second event per chassis.
+
+
+
+================================================================================
+  2. TECH STACK
+================================================================================
+
+  LANGUAGE AND RUNTIME
+     Python 3.11.x           Runtime. 3.12 is fine; 3.10 is acceptable
+                             fallback. Type hints used everywhere.
+
+  WEB / API
+     FastAPI 0.115.x         HTTP framework. ASGI-native. Pydantic
+                             models define every boundary.
+     Uvicorn 0.32.x          ASGI server. Single worker process per
+                             container — session state lives in-memory
+                             and must not be sharded yet.
+     sse-starlette 2.1.x     Server-Sent Events helper, integrates
+                             cleanly with FastAPI's async routes.
+
+  COMPUTER VISION
+     opencv-python 4.10.x    Classical primitives used by the pipeline:
+                             cv2.GaussianBlur, cv2.adaptiveThreshold,
+                             cv2.morphologyEx, cv2.findContours,
+                             cv2.HoughCircles (see ADR-008).
+     numpy 1.26.x            Arrays and mask arithmetic.
+     scikit-image 0.24.x     (Retained as an optional helper; no longer
+                             on the critical path.)
+
+  FILESYSTEM WATCHING
+     watchdog 5.0.x          Cross-platform file-system events. On
+                             Linux it uses inotify; on the plant
+                             server this is what we will rely on.
+
+  PERSISTENCE
+     SQLAlchemy 2.0.x        ORM and Core. Async engine.
+     psycopg[binary] 3.2.x   Postgres driver.
+     Alembic                 Migrations.
+     minio 7.2.x             Blob storage client for MinIO / S3.
+
+  CONFIG AND SCHEMA
+     Pydantic 2.9.x          Pydantic Settings for env, Pydantic models
+                             for API and config schemas.
+     PyYAML 6.0.x            Loading algo_params and calibration YAML.
+
+  TEST / QUALITY
+     pytest 8.3.x            Tests.
+     pytest-asyncio          Async test support.
+     pytest-cov 5.0.x        Coverage gate.
+     hypothesis              Property-based tests for the CV pipeline.
+     ruff 0.7.x              Lint + formatter.
+     mypy 1.13.x             Static typing.
+     pre-commit              Git hooks.
+
+  PACKAGING / INFRA
+     Docker + Compose        Single image; docker-compose for local
+                             dev stack (Postgres + MinIO).
+     Make                    Stable entrypoints: make test / eval /
+                             serve / lint / format.
+
+  OBSERVABILITY
+     structlog               Structured JSON logs.
+     prometheus-client       /metrics endpoint.
+     opentelemetry (P1)      Traces — add once core is stable.
+
+
+
+================================================================================
+  3. COMPONENT ARCHITECTURE
+================================================================================
+
+  The service is structured as eleven internal components. Each has a
+  single responsibility; the arrow direction shows "depends on".
+
+  +----------------------------------------------------------------------+
+  |                     COMPONENT DEPENDENCY GRAPH                       |
+  +----------------------------------------------------------------------+
+
+         API Layer (FastAPI routes)
+                |
+                v
+         Session Manager   <-------------------+
+          |    |    |                          |
+          v    v    v                          |
+     Folder    SSE    Aggregator               |
+     Watchers  Broker     |                    |
+          |               |                    |
+          v               v                    |
+     Measurement Engine   |                    |
+          |               |                    |
+     +----+----+----+     |                    |
+     |         |    |     |                    |
+     v         v    v     |                    |
+  Filename  Image  Calib  |                    |
+  Parser    Valid  Loader |                    |
+                          v                    |
+                    Persistence Layer ---------+
+                    (Postgres + MinIO)
+
+              Configuration Layer
+              (read by everything above at startup)
+
+
+  WHY THIS SHAPE
+     - API is thin; it delegates to Session Manager for anything stateful.
+     - Session Manager owns the session lifecycle and holds references
+       to the per-session watchers, aggregator, and event stream.
+     - The Measurement Engine is PURE — it takes an image and returns a
+       result. It does not know about sessions, databases, or the API.
+     - Persistence is the only place that writes to Postgres / MinIO.
+       Everything else hands records to it.
+     - Configuration is read once at startup and treated as immutable
+       for the lifetime of the process.
+
+
+
+================================================================================
+  4. RUNTIME MODEL (PROCESSES, THREADS, ASYNC)
+================================================================================
+
+  ONE PROCESS, ONE EVENT LOOP, ONE SMALL THREADPOOL
+  -------------------------------------------------
+
+     - The service is a single Uvicorn process. Session state lives in
+       a module-level dict keyed by session_id. Do NOT add extra
+       Uvicorn workers — that would split session state across
+       processes and break the aggregator.
+
+     - Async I/O (HTTP handlers, DB writes, MinIO uploads, SSE pushes)
+       all run on the default asyncio event loop.
+
+     - CPU-bound work (OpenCV operations, RANSAC) runs in a bounded
+       thread pool (concurrent.futures.ThreadPoolExecutor) scheduled
+       from the event loop via asyncio.to_thread. OpenCV releases the
+       GIL during most of its operations, so true parallelism is
+       achievable.
+
+     - The watchdog observer runs its own internal thread(s). Events
+       are pushed into an asyncio.Queue using
+       loop.call_soon_threadsafe, so the event loop consumes them
+       without blocking.
+
+
+  CONCURRENCY BOUNDARIES
+
+     - ONE folder watcher per camera side per active session.
+     - ONE aggregator task per active session.
+     - ONE SSE subscriber queue per connected dashboard client per
+       session.
+     - N image-processing tasks running in parallel, bounded by the
+       thread pool size (default: 2 * CPU cores).
+
+
+  BACK-PRESSURE
+
+     If images pile up faster than the pipeline can drain them, the
+     asyncio.Queue between the watcher and the pipeline grows.
+     The queue has a configurable max size. When it is full, new
+     filesystem events are dropped into a "deferred" queue and a
+     warning event is emitted to the SSE stream. This is defensive;
+     in practice the pipeline is far faster than the capture cadence.
+
+
+
+================================================================================
+  5. COMPONENT DEEP DIVES
+================================================================================
+
+
+--------------------------------------------------------------------------------
+  5.1  CONFIGURATION LAYER
+--------------------------------------------------------------------------------
+
+  PURPOSE
+     Load and validate all configuration at startup. Make it easy to
+     test with overrides. Surface a single, typed Settings object.
+
+  SOURCES (in precedence order, first wins)
+     1. Environment variables  (e.g. DB_DSN, IMAGES_LEFT_DIR)
+     2. .env file              (only in local dev)
+     3. configs/algo_params/<version>.yaml
+     4. configs/calibration/<id>.yaml
+
+  IMPLEMENTATION
+     - One Pydantic Settings class for env.
+     - One Pydantic model per YAML file (AlgoParams, Calibration).
+     - A get_settings() function with functools.lru_cache so every
+       caller gets the same instance.
+
+  SKETCH
+     # src/tad/config/settings.py
+     from pydantic_settings import BaseSettings
+
+     class Settings(BaseSettings):
+         db_dsn: str
+         minio_endpoint: str
+         minio_access_key: str
+         minio_secret_key: str
+         images_left_dir: str
+         images_right_dir: str
+         algo_params_version: str
+         default_calibration_left: str
+         default_calibration_right: str
+         asymmetry_threshold_mm: float = 0.15
+         queue_max_size: int = 256
+
+         class Config:
+             env_file = ".env"
+
+     @functools.lru_cache
+     def get_settings() -> Settings:
+         return Settings()
+
+
+--------------------------------------------------------------------------------
+  5.2  PERSISTENCE LAYER
+--------------------------------------------------------------------------------
+
+  PURPOSE
+     The ONLY component that writes to Postgres or MinIO. Exposes a
+     Repository class per aggregate (Session, Measurement, Chassis).
+     Uses SQLAlchemy 2.x async engine.
+
+  WHY REPOSITORY PATTERN
+     - Testability: stub a repository instead of a real DB.
+     - Clear ownership: no SQL lives in the aggregator or the pipeline.
+     - Transaction control: the API layer opens a session, repositories
+       accept it.
+
+  TABLES
+     sessions, measurements, chassis_records, calibrations
+     (full DDL in Section 7)
+
+  KEY METHODS
+
+     class SessionRepository:
+         async def create(self, record: Session) -> Session
+         async def mark_stopped(self, id: UUID, summary: dict) -> None
+         async def get(self, id: UUID) -> Session | None
+
+     class MeasurementRepository:
+         async def insert(self, record: Measurement) -> Measurement
+         async def get(self, id: UUID) -> Measurement | None
+         async def list_by_session(self, sid: UUID) -> list[Measurement]
+         async def get_pair(self, sid: UUID, chassis_no: str) ->
+             tuple[Measurement | None, Measurement | None]   # (L, R)
+
+     class ChassisRepository:
+         async def upsert(self, record: ChassisRecord) -> ChassisRecord
+         async def search_by_no(self, chassis_no: str)
+             -> list[ChassisRecord]
+
+  BLOB STORAGE
+     class DebugImageStore:
+         def put(self, key: str, jpeg_bytes: bytes) -> str   # returns URL
+         def get_url(self, key: str) -> str
+
+     Keys are of the form:
+         sessions/<session_id>/measurements/<measurement_id>.jpg
+
+
+--------------------------------------------------------------------------------
+  5.3  CALIBRATION LOADER
+--------------------------------------------------------------------------------
+
+  PURPOSE
+     Load the active calibration for each camera side and expose
+     mm_per_px when the pipeline asks for it.
+
+  CONTRACT
+     class CalibrationLoader:
+         def get(self, camera_side: Literal["L", "R"]) -> Calibration
+
+     Calibration is a Pydantic model:
+         calibration_id: str
+         camera_side: Literal["L", "R"]
+         mm_per_px: float
+         method: str
+         valid_from: datetime
+         operator: str
+         reference_image: str
+
+  STARTUP BEHAVIOUR
+     - Reads the two default calibration files named in Settings.
+     - Validates both parse and have camera_side matching the filename.
+     - If either is missing / invalid, /ready returns 503 and
+     /sessions/start refuses with ERR_NO_CALIBRATION.
+
+
+--------------------------------------------------------------------------------
+  5.4  FILENAME PARSER
+--------------------------------------------------------------------------------
+
+  PURPOSE
+     Convert a filename into a (chassis_no, camera_side) pair or a
+     clear rejection.
+
+  CONTRACT
+     FILENAME_RE = re.compile(
+         r"^(?P<chassis_no>[A-HJ-NPR-Z0-9]{17})"
+         r"_(?P<camera>[LR])"
+         r"(?:_\d+)?"
+         r"\.(?:jpg|jpeg|png)$",
+         re.IGNORECASE,
+     )
+
+     @dataclass(frozen=True)
+     class ParsedName:
+         chassis_no: str
+         camera_side: Literal["L", "R"]
+
+     def parse_filename(name: str) -> ParsedName:
+         m = FILENAME_RE.match(name)
+         if not m:
+             raise BadFilename(f"filename does not match convention: {name}")
+         return ParsedName(
+             chassis_no=m["chassis_no"].upper(),
+             camera_side=m["camera"].upper(),
+         )
+
+  NOTE
+     The parser is pure and synchronous. Trivial to unit-test.
+
+
+--------------------------------------------------------------------------------
+  5.5  IMAGE VALIDATOR
+--------------------------------------------------------------------------------
+
+  PURPOSE
+     Gate every image against the Image Contract in TRD Section 5.1
+     before the pipeline sees it.
+
+  CHECKS
+     - File is a non-empty, complete JPEG or PNG (trailing bytes OK).
+     - Resolution within configured min / max.
+     - Colour space is 3-channel RGB.
+     - Laplacian-variance blur metric >= 100.
+     - Mean pixel value within [40, 220].
+
+  CONTRACT
+     class ValidationResult:
+         ok: bool
+         error_code: str | None
+         message: str | None
+         meta: dict               # resolution, blur metric, exposure
+
+     def validate(image_bytes: bytes) -> tuple[np.ndarray, ValidationResult]
+
+     If ok is False, meta still contains whatever was measurable; the
+     caller persists an ERROR measurement with the error_code.
+
+
+--------------------------------------------------------------------------------
+  5.6  MEASUREMENT ENGINE — THE CV PIPELINE
+--------------------------------------------------------------------------------
+
+  PURPOSE
+     The heart of the system. Given an image and a calibration, return
+     a MeasurementResult. PURE — no I/O, no database, no logging beyond
+     debug traces.
+
+  INPUTS / OUTPUTS
+     @dataclass
+     class PipelineInput:
+         image_bgr: np.ndarray     # OpenCV convention
+         calibration: Calibration
+         algo_params: AlgoParams
+
+     @dataclass
+     class PipelineOutput:
+         diameter_mm: float | None
+         status: Literal["PASS", "FAIL", "REVIEW", "ERROR"]
+         confidence: float | None
+         circle: tuple[int, int, float] | None   # (cx, cy, r_px)
+         error_code: str | None
+         annotated_image: np.ndarray            # always produced
+
+  ORCHESTRATION
+     measure_innermost_diameter(inp: PipelineInput) -> PipelineOutput
+
+     Breaks down into named stages (each in its own file under
+     measurement/):
+
+        preprocessing.py   -> gaussian_blur()
+        threshold.py       -> adaptive_threshold() + morph_close()
+        contour_detect.py  -> find_candidate_contours()
+                               + detect_circle_in_contour()
+                               + detect_circle()
+        confidence.py      -> compute_confidence() + evaluate_status()
+        annotate.py        -> render_debug_image()
+        pipeline.py        -> orchestrates the above
+        models.py          -> PipelineInput, PipelineOutput, InnerCircle
+
+  CONCRETE SKETCH (pipeline.py, algo-1.3.0)
+
+     def measure_innermost_diameter(inp: PipelineInput) -> PipelineOutput:
+         gray    = cv2.cvtColor(inp.image_bgr, cv2.COLOR_BGR2GRAY)
+         blurred = gaussian_blur(gray, inp.blur_kernel)
+
+         binary  = adaptive_threshold(blurred,
+                     block_size=inp.threshold_block_size,
+                     c=inp.threshold_c)
+         cleaned = morph_close(binary,
+                     kernel_size=inp.morph_kernel_size,
+                     iterations=inp.morph_iterations)
+
+         circle = detect_circle(
+             gray, cleaned,
+             mm_per_px=inp.calibration_mm_per_px,
+             target_diameter_mm=inp.target_diameter_mm,
+             radius_tolerance_mm=inp.radius_tolerance_mm,
+             min_contour_area=inp.contour_min_area,
+             dp=inp.hough_dp, min_dist=inp.hough_min_dist,
+             param1=inp.hough_param1, param2=inp.hough_param2)
+
+         if circle is None:
+             return _error(inp, "ERR_NO_CIRCLE",
+                 "no circle matching target radius")
+
+         diameter_mm = 2.0 * circle.radius_px * inp.calibration_mm_per_px
+         status = evaluate_status(
+             diameter_mm, inp.target_diameter_mm,
+             ok_band_mm=inp.ok_band_mm,
+             somewhat_ok_band_mm=inp.somewhat_ok_band_mm,
+             tolerance_min_mm=inp.tolerance_min_mm,
+             tolerance_max_mm=inp.tolerance_max_mm)
+         conf = compute_confidence(
+             diameter_mm, inp.target_diameter_mm,
+             somewhat_ok_band_mm=inp.somewhat_ok_band_mm)
+
+         annotated = render_debug_image(
+             inp.image_bgr, circle, diameter_mm, status, conf,
+             target_diameter_mm=inp.target_diameter_mm,
+             mm_per_px=inp.calibration_mm_per_px)
+
+         return PipelineOutput(
+             diameter_mm=diameter_mm,
+             status=status,
+             confidence=conf,
+             circle=(circle.cx, circle.cy, circle.radius_px),
+             error_code=None,
+             annotated_image=annotated,
+         )
+
+  DETERMINISM
+     The contour + masked Hough pipeline is fully deterministic: there
+     is no stochastic sampling (RANSAC has been removed).  Given the
+     same image + algo_params + calibration, the output is identical.
+
+  TESTING
+     - Synthetic fixtures (bright plate + dark circle) committed under
+       tests/fixtures/images/ drive the unit tests.
+     - Real assembly-line images (cam18jdleofhtlhj6_{L,R}.jpg) serve as
+       a smoke-test fixture for the end-to-end pipeline.
+     - See ADR-008 for the rationale behind switching away from the
+       earlier Canny + pick_innermost + RANSAC approach.
+
+
+--------------------------------------------------------------------------------
+  5.7  CHASSIS AGGREGATOR
+--------------------------------------------------------------------------------
+
+  PURPOSE
+     Joins per-camera results into per-chassis results. One instance
+     per active session. Holds a small in-memory map:
+
+         pending: dict[str, dict[Literal["L", "R"], Measurement]]
+
+     chassis_no -> {"L": ..., "R": ...}  with missing side absent.
+
+  CONTRACT
+     class Aggregator:
+         def __init__(self, session_id, event_publisher,
+                      chassis_repo, asymmetry_threshold_mm): ...
+
+         async def accept(self, measurement: Measurement) -> None:
+             """Called once per per-camera result."""
+
+         async def flush(self) -> list[ChassisRecord]:
+             """Called on session stop; emits REVIEW records for
+             any chassis_no with a missing side."""
+
+  BEHAVIOUR
+     1. On accept(L or R):
+        - insert into pending[chassis_no][side]
+        - if both sides now present:
+            compute ChassisRecord (status matrix + asymmetry)
+            persist via chassis_repo.upsert
+            publish chassis_result event
+            pop pending[chassis_no]
+     2. On flush():
+        - iterate remaining pending entries
+        - build ChassisRecord with missing side nulls, status=REVIEW,
+          reason "missing side: L" or "missing side: R"
+        - persist + publish
+        - clear pending
+
+  CONCURRENCY
+     The aggregator is called from the pipeline's completion callback,
+     which runs on the event loop. One asyncio.Lock guards pending.
+
+
+--------------------------------------------------------------------------------
+  5.8  FOLDER WATCHERS
+--------------------------------------------------------------------------------
+
+  PURPOSE
+     Detect new files in /images/left and /images/right and push them
+     into a processing queue. One watcher per side per active session.
+
+  IMPLEMENTATION NOTES
+     - Use watchdog.observers.Observer with a FileSystemEventHandler.
+     - On on_created(event): enqueue the path.
+     - On_modified: ignore (create is what we want).
+     - The watchdog thread is not the event loop; use
+       loop.call_soon_threadsafe(queue.put_nowait, path).
+
+  SAFE-READ PROTOCOL
+     Images may be visible in the filesystem before the writer finishes
+     flushing. The processor, NOT the watcher, verifies stability:
+
+        1. Record the file's size.
+        2. Sleep a short configured interval.
+        3. Check size again. If changed, loop.
+        4. If unchanged for N iterations, proceed.
+
+     This avoids partial-JPEG failures without requiring the capture
+     system to signal completion.
+
+  CONTRACT
+     class FolderWatcher:
+         def __init__(self, side: Literal["L", "R"], path: Path,
+                      queue: asyncio.Queue[Path]): ...
+         def start(self) -> None
+         def stop(self) -> None
+
+
+--------------------------------------------------------------------------------
+  5.9  SESSION MANAGER
+--------------------------------------------------------------------------------
+
+  PURPOSE
+     The orchestration layer. Creates sessions, spins up the watchers
+     and aggregator, consumes images from the queue, and shuts it all
+     down on stop.
+
+  STATE
+     class SessionManager:
+         active: dict[UUID, SessionRuntime]
+
+         class SessionRuntime:
+             session: SessionRecord           # persisted row
+             queue: asyncio.Queue[QueueItem]
+             watcher_l: FolderWatcher
+             watcher_r: FolderWatcher
+             aggregator: Aggregator
+             event_broker: SseBroker          # per-session fan-out
+             consumer_task: asyncio.Task
+             algo_params: AlgoParams
+
+  START FLOW
+     1. Validate calibrations and folders exist.
+     2. INSERT into sessions table; get UUID.
+     3. Build queue, watchers, aggregator, broker.
+     4. Spawn consumer_task: loops reading queue, calls process_item.
+     5. Store runtime in active[session_id].
+     6. Return SessionStartResponse.
+
+  STOP FLOW
+     1. Stop watchers (no more new items).
+     2. Drain queue by waiting for consumer task to finish in-flight
+        work, bounded by a timeout.
+     3. Aggregator.flush() — emits REVIEW records for any orphan.
+     4. Compute summary; update sessions row.
+     5. Close the SSE broker (all subscribers disconnect cleanly).
+     6. Remove from active.
+
+  PROCESS_ITEM
+     Called once per image pulled from the queue:
+
+        1. Wait for file-size stability (safe-read protocol).
+        2. Read bytes; validate; decode via OpenCV.
+        3. Parse filename (camera side, chassis_no).
+        4. Load calibration for that side.
+        5. Run pipeline (CPU-bound, via asyncio.to_thread).
+        6. Upload debug image to MinIO.
+        7. Insert Measurement row (via repository).
+        8. Publish camera_result event to SSE broker.
+        9. aggregator.accept(measurement).
+
+
+--------------------------------------------------------------------------------
+  5.10  API LAYER (FastAPI)
+--------------------------------------------------------------------------------
+
+  PURPOSE
+     Thin HTTP surface. Delegates to Session Manager and repositories.
+     Validates request/response via Pydantic.
+
+  ROUTE SUMMARY
+
+     POST   /v1/sessions/start
+     POST   /v1/sessions/{id}/stop
+     GET    /v1/sessions/{id}/events          (SSE)
+     GET    /v1/sessions/{id}/results         (polling fallback)
+     GET    /v1/measurements/{id}
+     GET    /v1/debug/{id}                    (proxies a MinIO stream)
+     GET    /v1/health                        (liveness)
+     GET    /v1/ready                         (readiness)
+     GET    /metrics                          (Prometheus)
+
+  DEPENDENCIES
+     Each route declares its dependencies via FastAPI's Depends():
+
+        async def route(
+            session_manager: SessionManager = Depends(get_session_manager),
+            measurement_repo: MeasurementRepository = Depends(...),
+        ): ...
+
+     This makes swapping in fakes for tests trivial.
+
+  ERROR HANDLING
+     Custom exceptions (NoCalibrationError, SessionNotActiveError, etc.)
+     are mapped to error codes via a FastAPI exception handler. No
+     stack traces ever reach the client.
+
+
+--------------------------------------------------------------------------------
+  5.11  SSE EVENT BROKER
+--------------------------------------------------------------------------------
+
+  PURPOSE
+     In-memory fan-out of session events to every connected dashboard.
+     Per-session isolation: one broker per session.
+
+  MODEL
+     class SseBroker:
+         subscribers: list[asyncio.Queue[Event]]
+
+         def subscribe(self) -> asyncio.Queue[Event]:
+             q = asyncio.Queue(maxsize=128)
+             self.subscribers.append(q)
+             return q
+
+         def unsubscribe(self, q: asyncio.Queue) -> None: ...
+
+         async def publish(self, event: Event) -> None:
+             for q in list(self.subscribers):
+                 try:
+                     q.put_nowait(event)
+                 except asyncio.QueueFull:
+                     # slow client; drop the client rather than
+                     # backpressure the producer
+                     self.unsubscribe(q)
+
+  DELIVERY
+     FastAPI route:
+
+        @router.get("/v1/sessions/{sid}/events")
+        async def events(sid: UUID, sm: SessionManager = ...):
+            runtime = sm.require_active(sid)
+            queue = runtime.event_broker.subscribe()
+            return EventSourceResponse(_stream(queue, runtime))
+
+        async def _stream(q, runtime):
+            try:
+                while True:
+                    event = await q.get()
+                    yield {"event": event.type, "data": event.json()}
+            finally:
+                runtime.event_broker.unsubscribe(q)
+
+  EVENT TYPES
+     session_opened
+     camera_result
+     chassis_result
+     warning
+     session_closed
+
+  RESILIENCE
+     Events are IN-MEMORY only — dropping a client does not lose data,
+     because every event is persisted to Postgres at the moment of
+     publish. A reconnecting client can /results?since=cursor to catch
+     up, then re-subscribe.
+
+
+
+================================================================================
+  6. DATA FLOW SEQUENCES
+================================================================================
+
+
+  6.1  SEQUENCE — SESSION START
+  -----------------------------
+
+     Frontend                 API              SessionMgr     Persistence
+        |                      |                    |              |
+        |-- POST /start ------>|                    |              |
+        |                      |-- create() ------->|              |
+        |                      |                    |-- INSERT --->|
+        |                      |                    |<-- row ------|
+        |                      |                    |
+        |                      |                    |-- start watchers
+        |                      |                    |-- spawn consumer
+        |                      |                    |-- init broker
+        |                      |<-- SessionRuntime -|
+        |<-- 201 SessionResp --|                    |
+        |                                           |
+        |-- GET /events (SSE) ------------------->(subscribes to broker)
+        |<== session_opened event ================|
+
+
+  6.2  SEQUENCE — IMAGE ARRIVES AND IS PROCESSED
+  ----------------------------------------------
+
+     Watcher   Queue   Consumer   Pipeline   Persistence   Broker   Aggregator
+        |       |         |          |           |          |           |
+   (new file)   |         |          |           |          |           |
+        |-push->|         |          |           |          |           |
+        |       |--pop--->|          |           |          |           |
+        |       |         |-validate + parse --> |          |           |
+        |       |         |-to_thread-> measure()|          |           |
+        |       |         |<-----PipelineOutput--|          |           |
+        |       |         |-put debug image ---->|          |           |
+        |       |         |                      |-MinIO--->|           |
+        |       |         |-insert Measurement ->|          |           |
+        |       |         |                      |          |           |
+        |       |         |-publish camera_result ---------->|          |
+        |       |         |-aggregator.accept() ------------>|--------->|
+        |       |                                             |         |
+        |       |                             if pair complete|         |
+        |       |                             chassis_result<-|         |
+        |       |                             published       |         |
+
+
+  6.3  SEQUENCE — SESSION STOP
+  ----------------------------
+
+     Frontend                 API              SessionMgr   Aggregator    DB
+        |                      |                    |           |         |
+        |-- POST /stop ------->|                    |           |         |
+        |                      |-- stop() --------->|           |         |
+        |                      |                    |-- stop watchers     |
+        |                      |                    |-- await consumer    |
+        |                      |                    |-- flush ->|         |
+        |                      |                    |           |-upsert->|
+        |                      |                    |<- orphans -|        |
+        |                      |                    |-- compute summary   |
+        |                      |                    |-- UPDATE sessions->>|
+        |                      |                    |-- close broker      |
+        |                      |<-- SessionSummary -|                     |
+        |<-- 200 Summary ------|                    |                     |
+
+
+
+================================================================================
+  7. DATABASE SCHEMA (SQL DDL)
+================================================================================
+
+  The schema uses Postgres types. UUIDs are generated client-side for
+  idempotency friendliness. Timestamps are TIMESTAMPTZ.
+
+
+  -- sessions ----------------------------------------------------------
+  CREATE TABLE sessions (
+      session_id           UUID         PRIMARY KEY,
+      started_at           TIMESTAMPTZ  NOT NULL,
+      stopped_at           TIMESTAMPTZ,
+      started_by           VARCHAR(64)  NOT NULL,
+      status               VARCHAR(16)  NOT NULL
+                                       CHECK (status IN
+                                           ('ACTIVE', 'STOPPED', 'FAILED')),
+      left_dir             TEXT         NOT NULL,
+      right_dir            TEXT         NOT NULL,
+      algo_params_version  VARCHAR(32)  NOT NULL,
+      notes                TEXT,
+      summary_json         JSONB        -- populated at stop
+  );
+
+  CREATE INDEX ix_sessions_started_at ON sessions (started_at DESC);
+
+
+  -- measurements -------------------------------------------------------
+  CREATE TABLE measurements (
+      measurement_id       UUID         PRIMARY KEY,
+      session_id           UUID         NOT NULL REFERENCES sessions,
+      chassis_no           VARCHAR(17)  NOT NULL,
+      camera_side          CHAR(1)      NOT NULL
+                                       CHECK (camera_side IN ('L', 'R')),
+      image_path           TEXT         NOT NULL,
+      diameter_mm          NUMERIC(6,3),
+      tolerance_min_mm     NUMERIC(6,3) NOT NULL,
+      tolerance_max_mm     NUMERIC(6,3) NOT NULL,
+      status               VARCHAR(16)  NOT NULL
+                                       CHECK (status IN
+                                           ('PASS', 'FAIL',
+                                            'REVIEW', 'ERROR')),
+      confidence_score     NUMERIC(4,3),
+      circle_center_x_px   INTEGER,
+      circle_center_y_px   INTEGER,
+      radius_px            NUMERIC(8,3),
+      mm_per_px            NUMERIC(8,6) NOT NULL,
+      calibration_version  VARCHAR(32)  NOT NULL,
+      algo_params_version  VARCHAR(32)  NOT NULL,
+      debug_image_key      TEXT,
+      error_code           VARCHAR(32),
+      error_message        TEXT,
+      processed_at         TIMESTAMPTZ  NOT NULL,
+      latency_ms           INTEGER      NOT NULL
+  );
+
+  CREATE INDEX ix_measurements_session_chassis
+      ON measurements (session_id, chassis_no);
+  CREATE INDEX ix_measurements_chassis_no
+      ON measurements (chassis_no);
+  CREATE INDEX ix_measurements_processed_at
+      ON measurements (processed_at DESC);
+
+
+  -- chassis_records ----------------------------------------------------
+  CREATE TABLE chassis_records (
+      chassis_record_id    UUID         PRIMARY KEY,
+      session_id           UUID         NOT NULL REFERENCES sessions,
+      chassis_no           VARCHAR(17)  NOT NULL,
+      left_measurement_id  UUID         REFERENCES measurements,
+      right_measurement_id UUID         REFERENCES measurements,
+      left_diameter_mm     NUMERIC(6,3),
+      right_diameter_mm    NUMERIC(6,3),
+      avg_diameter_mm      NUMERIC(6,3),
+      asymmetry_mm         NUMERIC(6,3),
+      overall_status       VARCHAR(16)  NOT NULL,
+      reason               TEXT,         -- e.g. "missing side: L"
+      aggregated_at        TIMESTAMPTZ  NOT NULL,
+      CONSTRAINT uq_session_chassis
+          UNIQUE (session_id, chassis_no)
+  );
+
+  CREATE INDEX ix_chassis_records_chassis_no
+      ON chassis_records (chassis_no);
+
+
+  -- calibrations (source of truth is the YAML; table is for audit) ----
+  CREATE TABLE calibrations (
+      calibration_id       VARCHAR(32)  PRIMARY KEY,
+      camera_side          CHAR(1)      NOT NULL CHECK (camera_side IN ('L','R')),
+      mm_per_px            NUMERIC(8,6) NOT NULL,
+      method               VARCHAR(32)  NOT NULL,
+      valid_from           TIMESTAMPTZ  NOT NULL,
+      operator             VARCHAR(64)  NOT NULL,
+      reference_image      TEXT,
+      imported_at          TIMESTAMPTZ  NOT NULL DEFAULT now()
+  );
+
+
+
+================================================================================
+  8. DIRECTORY STRUCTURE
+================================================================================
+
+  trailing-arm-detection/
+  |-- CLAUDE.md
+  |-- README.md
+  |-- pyproject.toml
+  |-- .pre-commit-config.yaml
+  |-- .env.example
+  |-- Makefile
+  |-- Dockerfile
+  |-- docker-compose.yml
+  |
+  |-- configs/
+  |   |-- algo_params/
+  |   |   |-- algo-1.0.0.yaml
+  |   |   |-- algo-1.2.0.yaml     (current)
+  |   |-- calibration/
+  |       |-- cal-2026-03-14-L.yaml
+  |       |-- cal-2026-03-14-R.yaml
+  |
+  |-- src/
+  |   |-- tad/
+  |       |-- __init__.py
+  |       |-- main.py                          (uvicorn entrypoint)
+  |       |-- config/
+  |       |   |-- settings.py
+  |       |   |-- algo_params.py               (Pydantic model + loader)
+  |       |   |-- calibration.py               (Pydantic model + loader)
+  |       |-- api/
+  |       |   |-- app.py                       (FastAPI factory)
+  |       |   |-- deps.py                      (Depends() wiring)
+  |       |   |-- routes_sessions.py
+  |       |   |-- routes_measurements.py
+  |       |   |-- routes_health.py
+  |       |   |-- schemas.py                   (request/response models)
+  |       |   |-- errors.py                    (exception -> code map)
+  |       |   |-- sse.py
+  |       |-- sessions/
+  |       |   |-- manager.py
+  |       |   |-- runtime.py                   (SessionRuntime dataclass)
+  |       |   |-- consumer.py                  (process_item loop)
+  |       |   |-- broker.py                    (SseBroker)
+  |       |   |-- aggregator.py
+  |       |   |-- watcher.py                   (FolderWatcher)
+  |       |-- data/
+  |       |   |-- filename_parser.py
+  |       |   |-- image_validator.py
+  |       |   |-- safe_read.py                 (size-stability protocol)
+  |       |-- measurement/                     (see ADR-008, algo-1.3.0)
+  |       |   |-- pipeline.py                  (orchestrator)
+  |       |   |-- preprocessing.py             (gaussian_blur)
+  |       |   |-- threshold.py                 (adaptive_threshold, morph_close)
+  |       |   |-- contour_detect.py            (find_candidate_contours,
+  |       |   |                                 detect_circle_in_contour,
+  |       |   |                                 detect_circle)
+  |       |   |-- confidence.py                (compute_confidence, evaluate_status)
+  |       |   |-- annotate.py                  (render_debug_image)
+  |       |   |-- models.py                    (PipelineInput, PipelineOutput,
+  |       |   |                                 InnerCircle)
+  |       |   |-- __main__.py                  (CLI entry point)
+  |       |-- persistence/
+  |       |   |-- db.py                        (async engine, session)
+  |       |   |-- models.py                    (SQLAlchemy mapped classes)
+  |       |   |-- repositories.py
+  |       |   |-- blob_store.py                (MinIO client)
+  |       |   |-- migrations/
+  |       |       |-- versions/
+  |       |-- observability/
+  |       |   |-- logging_conf.py
+  |       |   |-- metrics.py                   (prometheus collectors)
+  |       |-- evals/
+  |       |   |-- eval.py
+  |       |   |-- metrics.py
+  |
+  |-- tests/
+  |   |-- unit/
+  |   |   |-- test_filename_parser.py
+  |   |   |-- test_image_validator.py
+  |   |   |-- test_pipeline.py
+  |   |   |-- test_aggregator.py
+  |   |-- integration/
+  |   |   |-- test_session_flow.py             (real Postgres, fake folders)
+  |   |   |-- test_api_sse.py
+  |   |-- fixtures/
+  |       |-- images/
+  |       |-- calibration/
+  |
+  |-- scripts/
+  |   |-- run_calibration.py
+  |   |-- validate_algo_params.py
+  |   |-- replay_session.py
+  |   |-- seed_db.py
+  |
+  |-- docs/
+  |   |-- decisions/                           (ADRs)
+  |   |-- trd.txt
+  |   |-- prd.txt
+  |   |-- architecture.txt                     (this doc)
+  |   |-- api.md
+  |
+  |-- notebooks/                               (exploration only)
+  |-- data/                                    (.gitignored)
+  |-- .github/
+      |-- workflows/
+          |-- ci.yml
+          |-- eval.yml
+          |-- cd.yml
+
+
+
+================================================================================
+  9. KEY INTERFACES (PYTHON SIGNATURES)
+================================================================================
+
+  Exact signatures to code against. Copy these into stubs first, then
+  implement. The tests for each component can be written against the
+  signatures before the implementation lands.
+
+
+  # ------ config -----------------------------------------------------
+  class Settings(BaseSettings): ...
+
+  class AlgoParams(BaseModel):
+      version: str
+      clahe: CLAHEParams
+      blur: BlurParams
+      canny: CannyParams
+      hough: HoughParams
+      center_region: CenterRegionParams
+      ransac: RansacParams
+      confidence: ConfidenceParams
+      tolerance: ToleranceParams
+
+  def load_algo_params(version: str) -> AlgoParams
+
+  class Calibration(BaseModel):
+      calibration_id: str
+      camera_side: Literal["L", "R"]
+      mm_per_px: float
+      method: str
+      valid_from: datetime
+      operator: str
+      reference_image: str
+
+  def load_calibration(path: Path) -> Calibration
+
+
+  # ------ data -------------------------------------------------------
+  def parse_filename(name: str) -> ParsedName
+
+  def validate_image(image_bytes: bytes) ->
+      tuple[np.ndarray | None, ValidationResult]
+
+  async def wait_for_stable(path: Path,
+      checks: int = 3, interval_ms: int = 150) -> None
+
+
+  # ------ measurement ------------------------------------------------
+  def measure_innermost_diameter(
+      inp: PipelineInput) -> PipelineOutput
+
+  def evaluate_status(
+      diameter_mm: float, confidence: float,
+      params: AlgoParams) -> Literal["PASS", "FAIL", "REVIEW", "ERROR"]
+
+
+  # ------ persistence ------------------------------------------------
+  class SessionRepository:
+      async def create(self, record: SessionRow) -> SessionRow
+      async def mark_stopped(self, id: UUID, summary: dict) -> None
+      async def get(self, id: UUID) -> SessionRow | None
+
+  class MeasurementRepository:
+      async def insert(self, row: MeasurementRow) -> MeasurementRow
+      async def get(self, id: UUID) -> MeasurementRow | None
+      async def list_by_session(self,
+          sid: UUID, since: datetime | None = None)
+          -> list[MeasurementRow]
+      async def get_pair(self, sid: UUID, chassis_no: str)
+          -> tuple[MeasurementRow | None, MeasurementRow | None]
+
+  class ChassisRepository:
+      async def upsert(self, row: ChassisRow) -> ChassisRow
+      async def search(self, chassis_no: str) -> list[ChassisRow]
+
+  class DebugImageStore:
+      async def put(self, key: str, jpeg: bytes) -> str
+      async def stream(self, key: str) -> AsyncIterator[bytes]
+
+
+  # ------ sessions ---------------------------------------------------
+  class SessionManager:
+      async def start(self, req: StartRequest) -> StartResponse
+      async def stop(self, sid: UUID) -> StopResponse
+      def require_active(self, sid: UUID) -> SessionRuntime
+
+  class Aggregator:
+      async def accept(self, m: MeasurementRow) -> None
+      async def flush(self) -> None
+
+  class FolderWatcher:
+      def start(self) -> None
+      def stop(self) -> None
+
+
+  # ------ api (FastAPI schemas) --------------------------------------
+  class StartRequest(BaseModel):
+      started_by: str
+      notes: str | None = None
+
+  class StartResponse(BaseModel):
+      session_id: UUID
+      status: Literal["ACTIVE"]
+      left_dir: str
+      right_dir: str
+      algo_params_version: str
+      left_calibration: str
+      right_calibration: str
+      started_at: datetime
+
+  # ... (full schemas in src/tad/api/schemas.py)
+
+
+
+================================================================================
+  10. CONFIGURATION FILE FORMATS
+================================================================================
+
+  10.1  algo_params YAML (configs/algo_params/algo-1.2.0.yaml)
+  -----------------------------------------------------------
+
+     version: "algo-1.2.0"
+     clahe:
+       clip_limit: 2.0
+       tile_grid_size: [8, 8]
+     blur:
+       kernel: 5
+     canny:
+       lower_ratio: 0.66
+       upper_ratio: 1.33
+     hough:
+       dp: 1.2
+       min_dist: 40
+       param1: 100
+       param2: 30
+       min_radius_px: 40
+       max_radius_px: 160
+     center_region:
+       inner_fraction: 0.7
+     ransac:
+       iterations: 200
+       inlier_threshold_px: 1.0
+       seed: 42
+     confidence:
+       conf_pass: 0.85
+       conf_review: 0.60
+     tolerance:
+       min_mm: 47.000
+       max_mm: 47.500
+       asymmetry_threshold_mm: 0.15
+
+
+  10.2  calibration YAML (configs/calibration/cal-2026-03-14-L.yaml)
+  -----------------------------------------------------------------
+
+     calibration_id: "cal-2026-03-14-L"
+     camera_side: "L"
+     mm_per_px: 0.082340
+     method: "checkerboard"
+     valid_from: "2026-03-14T09:00:00Z"
+     operator: "qa-technician-12"
+     reference_image: "configs/calibration/images/cal-2026-03-14-L.jpg"
+
+
+  10.3  .env (local dev)
+  ----------------------
+
+     DB_DSN=postgresql+psycopg://tad:tad@localhost:5432/tad
+     MINIO_ENDPOINT=localhost:9000
+     MINIO_ACCESS_KEY=minioadmin
+     MINIO_SECRET_KEY=minioadmin
+     MINIO_BUCKET=tad-debug
+
+     IMAGES_LEFT_DIR=/tmp/tad/images/left
+     IMAGES_RIGHT_DIR=/tmp/tad/images/right
+
+     ALGO_PARAMS_VERSION=algo-1.2.0
+     DEFAULT_CALIBRATION_LEFT=configs/calibration/cal-2026-03-14-L.yaml
+     DEFAULT_CALIBRATION_RIGHT=configs/calibration/cal-2026-03-14-R.yaml
+
+     ASYMMETRY_THRESHOLD_MM=0.15
+     QUEUE_MAX_SIZE=256
+     LOG_LEVEL=INFO
+
+
+
+================================================================================
+  11. LOCAL DEVELOPMENT SETUP
+================================================================================
+
+  ONE-TIME
+     - Install Python 3.11 and Docker.
+     - Clone repo; copy .env.example to .env.
+     - uv venv   (or python -m venv .venv)
+     - source .venv/bin/activate
+     - uv pip install -e ".[dev]"   (or pip install -e ".[dev]")
+     - pre-commit install
+
+  STACK UP
+     make up              # docker compose: postgres + minio
+     make migrate         # alembic upgrade head
+     make seed            # optional seed data
+
+  RUN THE SERVICE
+     make serve           # uvicorn src.tad.main:app --reload
+
+  DROP IMAGES TO TEST
+     cp tests/fixtures/images/MALBB51BLPM123456_L.jpg \
+        /tmp/tad/images/left/
+     cp tests/fixtures/images/MALBB51BLPM123456_R.jpg \
+        /tmp/tad/images/right/
+
+  CURL A SESSION
+     curl -X POST http://localhost:8000/v1/sessions/start \
+         -H "content-type: application/json" \
+         -d '{"started_by":"dev", "notes":"local"}'
+
+     # In another terminal, subscribe to events:
+     curl -N http://localhost:8000/v1/sessions/<ID>/events
+
+  TESTS
+     make test            # ruff + mypy + pytest
+     make test-unit
+     make test-integration
+     make eval            # run the locked eval harness
+
+
+
+================================================================================
+  12. IMPLEMENTATION ROADMAP (BUILD ORDER)
+================================================================================
+
+  Build in this order. Each step is independently testable. Do not
+  skip ahead — the value is that each step is small and green.
+
+
+  STEP 1 — PROJECT SCAFFOLD
+     Goal: a project that runs, has lint/test, and can be served.
+     - pyproject.toml with pinned deps
+     - Makefile
+     - Dockerfile + docker-compose (Postgres + MinIO)
+     - Minimal FastAPI app at src/tad/main.py with /health
+     - CI: ci.yml runs ruff + mypy + pytest (empty)
+     Exit: make test is green; curl /health returns 200.
+
+
+  STEP 2 — CONFIG LOADERS
+     Goal: Settings, AlgoParams, Calibration load and validate.
+     - Pydantic Settings reading .env
+     - AlgoParams + load_algo_params(version)
+     - Calibration + load_calibration(path)
+     Exit: unit tests for all three; /ready returns 200.
+
+
+  STEP 3 — FILENAME PARSER + IMAGE VALIDATOR
+     Goal: pure functions, fully tested.
+     - FILENAME_RE + parse_filename
+     - validate_image with all gates
+     Exit: 100% branch coverage on these modules.
+
+
+  STEP 4 — MEASUREMENT PIPELINE (OFFLINE)
+     Goal: a function that takes an image and returns a diameter.
+     - preprocessing, edges, circle_detect, ransac_refine, confidence,
+       annotate, pipeline
+     - Fixture images under tests/fixtures/images/
+     - Unit + property tests
+     - CLI script: python -m tad.measurement.pipeline <image> <cal>
+     Exit: on fixture images, measured diameter matches expected
+     within 0.05 mm.
+
+
+  STEP 5 — PERSISTENCE LAYER
+     Goal: rows in Postgres, blobs in MinIO.
+     - SQLAlchemy async engine; Alembic migration 001 with all tables
+     - Repository classes with tests (against real Postgres in CI)
+     - DebugImageStore with MinIO
+     Exit: integration test inserts and reads a Measurement round-trip.
+
+
+  STEP 6 — AGGREGATOR
+     Goal: given two Measurements, produce a ChassisRecord.
+     - Aggregator.accept with in-memory pending map
+     - Status matrix (see TRD 7.1)
+     - asymmetry threshold
+     - flush() for orphans
+     Exit: unit tests cover every cell of the status matrix plus the
+     asymmetry downgrade and the orphan path.
+
+
+  STEP 7 — SSE BROKER
+     Goal: per-session fan-out with slow-subscriber protection.
+     - In-memory subscribe/unsubscribe/publish
+     - FastAPI route /v1/sessions/{id}/events
+     Exit: integration test: two concurrent subscribers both see the
+     same event; a slow one is dropped rather than stalling.
+
+
+  STEP 8 — FOLDER WATCHERS + CONSUMER
+     Goal: dropping a file into /tmp/tad/images/left triggers a
+     measurement.
+     - FolderWatcher using watchdog
+     - Safe-read size-stability loop
+     - process_item: validate -> parse -> measure (to_thread) ->
+       upload -> insert -> publish -> aggregate
+     Exit: end-to-end integration test spins up a SessionManager,
+     drops fixture files, and asserts both events arrive.
+
+
+  STEP 9 — SESSION MANAGER + API ROUTES
+     Goal: the full lifecycle behind HTTP.
+     - POST /sessions/start -> returns ACTIVE session
+     - POST /sessions/{id}/stop -> returns summary
+     - GET /sessions/{id}/results (polling fallback)
+     - GET /v1/measurements/{id}, GET /v1/debug/{id}
+     Exit: curl walkthrough in Section 11 works end to end.
+
+
+  STEP 10 — OBSERVABILITY
+     Goal: production-readiness hygiene.
+     - structlog + request IDs
+     - Prometheus /metrics with images_processed_total, latency
+       histogram, chassis_results_total, confidence_score, etc.
+     - Readiness probe verifies DB, MinIO, calibration, folders
+     Exit: Prometheus scrapes the metric endpoint locally.
+
+
+  STEP 11 — EVAL HARNESS
+     Goal: locked test set + pass/fail gate.
+     - tests/eval/dataset.csv (chassis_no, image_path, side,
+       caliper_mm)
+     - evals/eval.py reports MAE, P95, max error, per-side slice
+     - eval.yml GH action runs on every PR and fails on regression
+     Exit: the current pipeline passes the gate; a deliberate
+     regression fails it.
+
+
+  STEP 12 — HARDEN AND RELEASE
+     Goal: ready for staging.
+     - Error envelope standardisation
+     - Retries and circuit breaker around DB writes
+     - Graceful shutdown (in-flight items complete)
+     - Dockerfile finalised (non-root user, healthcheck)
+     - Release tag; cd.yml builds and pushes image
+     Exit: staging runs a replay of real images through the service.
+
+
+
+================================================================================
+  13. TESTING STRATEGY (PER COMPONENT)
+================================================================================
+
+  Component            Test Kind              Notes
+  -------------------  ---------------------  --------------------------
+  Filename parser      Unit                   Valid + invalid cases,
+                                              every rejection reason.
+  Image validator      Unit                   Pre-built tiny images
+                                              (too small, too blurry,
+                                              overexposed, truncated).
+  Pipeline             Unit + property        Synthetic circles with
+                                              known radius; translation
+                                              and rotation invariants.
+  Calibration loader   Unit                   Missing file, bad YAML,
+                                              side mismatch.
+  Repositories         Integration (real PG)  Use pytest-docker or a
+                                              pre-provisioned container.
+  Blob store           Integration (MinIO)    Round-trip jpeg bytes.
+  Aggregator           Unit                   Full status matrix +
+                                              asymmetry + orphans.
+  Broker               Unit (asyncio)         Fan-out, slow subscriber,
+                                              unsubscribe on close.
+  Folder watcher       Integration            Drop files, assert queue
+                                              receives them in order.
+  Session manager      Integration            Full start -> drop files
+                                              -> stop cycle.
+  API routes           Integration (httpx)    Each route's happy path
+                                              and two error paths.
+  Eval harness         System                 Runs nightly + every PR.
+
+
+  CONVENTIONS
+     - pytest-asyncio 'auto' mode; use async def tests throughout.
+     - Fixtures live under tests/fixtures/ and are committed to the repo.
+     - Time is never real in tests: use freezegun or pass a clock
+       callable into classes that need "now".
+     - Tests must not reach the network (except integration tests that
+       target local Postgres/MinIO via docker-compose).
+
+
+
+================================================================================
+  14. DEPLOYMENT ARCHITECTURE
+================================================================================
+
+  PLANT-SIDE TOPOLOGY
+  -------------------
+
+     +----------------------------------------------------------+
+     |                  Plant Server                            |
+     |                                                          |
+     |  +----------------+   +-------------+   +-------------+  |
+     |  | tad-service    |-->| postgres    |   | minio       |  |
+     |  | (this app)     |   |             |   |             |  |
+     |  +--------+-------+   +-------------+   +------+------+  |
+     |           |                                    ^         |
+     |           | reads                              |         |
+     |           v                                    | writes  |
+     |  +---------------------+                       |         |
+     |  | /images/left (nfs?) |                       |         |
+     |  | /images/right (nfs?)|                       |         |
+     |  +---------------------+                       |         |
+     +----------------------------------------------------------+
+
+  Everything is on the same Docker network. Postgres and MinIO have
+  their own volumes. The image folders are mounted into the
+  tad-service container as read-only.
+
+
+  DOCKER COMPOSE (production-like)
+
+     services:
+       tad:
+         image: registry.plant.internal/tad:${GIT_SHA}
+         restart: unless-stopped
+         env_file: /etc/tad/env
+         volumes:
+           - /plant/images/left:/images/left:ro
+           - /plant/images/right:/images/right:ro
+           - ./configs:/app/configs:ro
+         ports:
+           - "127.0.0.1:8000:8000"
+         depends_on: [postgres, minio]
+         healthcheck:
+           test: ["CMD", "curl", "-f", "http://localhost:8000/v1/ready"]
+           interval: 10s
+           timeout: 2s
+           retries: 3
+
+       postgres:
+         image: postgres:16
+         volumes: [pgdata:/var/lib/postgresql/data]
+         environment:
+           POSTGRES_USER: tad
+           POSTGRES_PASSWORD: ${PG_PASS}
+           POSTGRES_DB: tad
+
+       minio:
+         image: minio/minio
+         command: server /data --console-address ":9001"
+         volumes: [miniodata:/data]
+         environment:
+           MINIO_ROOT_USER: ${MINIO_USER}
+           MINIO_ROOT_PASSWORD: ${MINIO_PASS}
+
+
+  ROLLOUT
+     - Push image to the plant registry tagged with the git SHA.
+     - On staging: docker compose pull && up -d.
+     - Run replay_session.py against a recent day of images.
+     - If outputs match the current production service within
+       tolerance, tag the image for production and repeat on prod.
+
+
+
+================================================================================
+  15. OBSERVABILITY AND OPERATIONAL RUNBOOK
+================================================================================
+
+  LOGS
+     - JSON format via structlog.
+     - Every record includes session_id, chassis_no (hashed in info /
+       warn; plaintext in debug), camera_side, measurement_id.
+     - Error records include the exception class and correlation id.
+
+
+  METRICS (Prometheus)
+     Counter    images_processed_total{side, status}
+     Counter    chassis_results_total{status}
+     Counter    warnings_total{reason}
+     Histogram  image_latency_seconds{side}
+     Histogram  confidence_score{side}
+     Histogram  diameter_mm{side}
+     Histogram  asymmetry_mm
+     Gauge      sessions_active
+     Gauge      pending_chassis_count{session_id}
+
+
+  ALERTS (starter set)
+     - error rate (status=ERROR or HTTP 5xx) exceeds 2x 7-day baseline
+     - manual review rate > 5 % over a 24 h window
+     - ERR_NO_CIRCLE rate > 1 % over a 24 h window
+     - asymmetry_mm p95 creeps above historical baseline
+     - /ready has returned non-200 for more than 60 s
+
+
+  RUNBOOK — QUICK ACTIONS
+     Dashboard "loading" forever
+        -> check /v1/ready; if 503, check Postgres + MinIO + folders
+        -> re-check the two calibration YAML files exist and parse
+
+     Many ERR_NO_CIRCLE events suddenly
+        -> likely lighting change or capture cadence change
+        -> inspect debug images; escalate to Plant Engineering
+
+     Rising asymmetry without throughput change
+        -> probable single-camera calibration drift
+        -> run scripts/run_calibration.py for the suspect side
+
+     Slow dashboard updates
+        -> check sessions_active gauge and subscriber count
+        -> if broker queue sizes are high, a slow client is blocking
+           itself — the broker will drop it automatically
+
+
+
+================================================================================
+  16. CROSS-CUTTING CONCERNS
+================================================================================
+
+  IDEMPOTENCY
+     - An image can be seen by the watcher more than once (fs flakiness).
+     - process_item key is (session_id, absolute_path, file_mtime).
+       Already-seen keys are no-ops with a debug log.
+
+  DETERMINISM
+     - numpy.random.Generator(seed=ransac.seed) created per call.
+     - No time-based branches anywhere in measurement/*.
+     - DB rows store algo_params_version and calibration_version so
+       that any past measurement can be reproduced from source.
+
+  ERROR ENVELOPE
+     Every API error returns:
+
+        {
+          "error_code": "ERR_...",
+          "error_message": "human-readable, actionable",
+          "request_id": "rid-..."
+        }
+
+     5xx errors include a request_id that matches the log.
+
+  GRACEFUL SHUTDOWN
+     - SIGTERM triggers stop of all active sessions (same path as
+       POST /stop for each), with a 30 s drain budget.
+     - Uvicorn's lifespan event handlers orchestrate this.
+
+  SECRETS
+     - Loaded only from environment. Never logged. Never echoed.
+
+  TIME
+     - All timestamps are TIMESTAMPTZ in UTC in the database.
+     - All log timestamps are UTC. The UI is responsible for rendering
+       in the plant's local zone.
+
+
+
+================================================================================
+  17. APPENDIX — CODE SKETCHES FOR TRICKY BITS
+================================================================================
+
+
+  17.1  ADAPTIVE THRESHOLD + MORPH CLOSE (measurement/threshold.py)
+  -----------------------------------------------------------------
+
+     def adaptive_threshold(blurred_gray: np.ndarray,
+                            *, block_size: int = 51,
+                            c: int = 10) -> np.ndarray:
+         return cv2.adaptiveThreshold(
+             blurred_gray, 255,
+             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+             cv2.THRESH_BINARY_INV,
+             block_size, c,
+         )
+
+     def morph_close(binary: np.ndarray,
+                     *, kernel_size: int = 3,
+                     iterations: int = 1) -> np.ndarray:
+         kernel = np.ones((kernel_size, kernel_size), np.uint8)
+         return cv2.morphologyEx(binary, cv2.MORPH_CLOSE,
+                                 kernel, iterations=iterations)
+
+
+  17.2  CONTOUR + MASKED HOUGH (measurement/contour_detect.py)
+  ------------------------------------------------------------
+
+     def find_candidate_contours(binary_mask,
+                                  *, min_area: float = 50.0):
+         contours, _ = cv2.findContours(
+             binary_mask,
+             cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
+         )
+         filtered = [c for c in contours
+                     if cv2.contourArea(c) >= min_area]
+         return sorted(filtered, key=cv2.contourArea, reverse=True)
+
+     def detect_circle_in_contour(gray, contour, *,
+                                   mm_per_px, target_diameter_mm,
+                                   radius_tolerance_mm=0.3,
+                                   dp=1.2, min_dist=10,
+                                   param1=50, param2=20):
+         ppm = 1.0 / mm_per_px
+         min_r = int((target_diameter_mm - radius_tolerance_mm)
+                     / 2.0 * ppm)
+         max_r = int((target_diameter_mm + radius_tolerance_mm)
+                     / 2.0 * ppm)
+
+         mask = np.zeros_like(gray)
+         cv2.drawContours(mask, [contour], -1, 255,
+                          thickness=cv2.FILLED)
+         masked_gray = cv2.bitwise_and(gray, gray, mask=mask)
+
+         circles = cv2.HoughCircles(
+             masked_gray, cv2.HOUGH_GRADIENT,
+             dp=dp, minDist=min_dist,
+             param1=param1, param2=param2,
+             minRadius=min_r, maxRadius=max_r,
+         )
+         if circles is None:
+             return None
+
+         x, y, r = (float(v) for v in circles[0][0])
+         return InnerCircle(cx=int(round(x)),
+                            cy=int(round(y)),
+                            radius_px=r, peak=1.0)
+
+     def detect_circle(gray, binary_mask, ...):
+         for c in find_candidate_contours(binary_mask, ...):
+             circle = detect_circle_in_contour(gray, c, ...)
+             if circle is not None:
+                 return circle
+         return None
+
+
+  17.3  BAND-BASED CLASSIFICATION (measurement/confidence.py)
+  -----------------------------------------------------------
+
+     def evaluate_status(diameter_mm, target_mm, *,
+                         ok_band_mm=0.2,
+                         somewhat_ok_band_mm=0.5,
+                         tolerance_min_mm=47.0,
+                         tolerance_max_mm=47.5):
+         if diameter_mm < tolerance_min_mm \
+            or diameter_mm > tolerance_max_mm:
+             return "FAIL"
+         delta = abs(diameter_mm - target_mm)
+         if delta <= ok_band_mm:       return "PASS"
+         if delta <= somewhat_ok_band_mm: return "REVIEW"
+         return "FAIL"
+
+
+  17.4  FOLDER WATCHER -> ASYNC QUEUE (sessions/watcher.py)
+  ---------------------------------------------------------
+
+     class _Handler(FileSystemEventHandler):
+         def __init__(self, loop, queue, side):
+             self.loop = loop
+             self.queue = queue
+             self.side = side
+
+         def on_created(self, event):
+             if event.is_directory:
+                 return
+             path = Path(event.src_path)
+             self.loop.call_soon_threadsafe(
+                 self.queue.put_nowait,
+                 QueueItem(side=self.side, path=path))
+
+     class FolderWatcher:
+         def __init__(self, side, path, queue):
+             self._obs = Observer()
+             self._obs.schedule(
+                 _Handler(asyncio.get_running_loop(), queue, side),
+                 str(path),
+                 recursive=False)
+
+         def start(self): self._obs.start()
+         def stop(self):
+             self._obs.stop()
+             self._obs.join(timeout=5)
+
+
+  17.5  PROCESS_ITEM LOOP (sessions/consumer.py)
+  ----------------------------------------------
+
+     async def process_item(item: QueueItem, ctx: SessionRuntime) -> None:
+         try:
+             await wait_for_stable(item.path)
+             parsed = parse_filename(item.path.name)
+             data = item.path.read_bytes()
+             image, vr = validate_image(data)
+             if not vr.ok:
+                 await _emit_warning(ctx, parsed, item, vr)
+                 return
+             cal = ctx.calibrations[parsed.camera_side]
+             t0 = time.perf_counter()
+             output = await asyncio.to_thread(
+                 measure_innermost_diameter,
+                 PipelineInput(image, cal, ctx.algo_params))
+             latency_ms = int((time.perf_counter() - t0) * 1000)
+
+             debug_key = f"sessions/{ctx.session.session_id}/measurements/{uuid4()}.jpg"
+             await ctx.blob_store.put(
+                 debug_key, _to_jpeg(output.annotated_image))
+
+             row = _measurement_row(ctx, parsed, item, output,
+                                    cal, debug_key, latency_ms)
+             await ctx.meas_repo.insert(row)
+
+             await ctx.broker.publish(
+                 Event(type="camera_result", payload=row.to_dto()))
+             await ctx.aggregator.accept(row)
+
+         except BadFilename as e:
+             await _emit_warning(ctx, None, item,
+                 ValidationResult.bad_filename(str(e)))
+         except Exception as e:
+             log.exception("process_item failed", path=str(item.path))
+             await _emit_warning(ctx, None, item,
+                 ValidationResult.internal(str(e)))
+
+
+  17.6  STATUS MATRIX (sessions/aggregator.py)
+  --------------------------------------------
+
+     STATUS_MATRIX = {
+         ("PASS",   "PASS"):   "PASS",
+         ("PASS",   "REVIEW"): "REVIEW",
+         ("PASS",   "FAIL"):   "FAIL",
+         ("PASS",   "ERROR"):  "ERROR",
+         ("REVIEW", "PASS"):   "REVIEW",
+         ("REVIEW", "REVIEW"): "REVIEW",
+         ("REVIEW", "FAIL"):   "FAIL",
+         ("REVIEW", "ERROR"):  "ERROR",
+         ("FAIL",   "PASS"):   "FAIL",
+         ("FAIL",   "REVIEW"): "FAIL",
+         ("FAIL",   "FAIL"):   "FAIL",
+         ("FAIL",   "ERROR"):  "FAIL",
+         ("ERROR",  "PASS"):   "ERROR",
+         ("ERROR",  "REVIEW"): "ERROR",
+         ("ERROR",  "FAIL"):   "FAIL",
+         ("ERROR",  "ERROR"):  "ERROR",
+     }
+
+     def combine(left_status, right_status, asymmetry_mm, threshold):
+         overall = STATUS_MATRIX[(left_status, right_status)]
+         if overall == "PASS" and asymmetry_mm is not None \
+            and asymmetry_mm > threshold:
+             overall = "REVIEW"
+         return overall
+
+
+================================================================================
+                      END OF DOCUMENT — ARCHITECTURE v1.0
+================================================================================

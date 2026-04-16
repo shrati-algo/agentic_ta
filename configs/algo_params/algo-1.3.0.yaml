@@ -1,0 +1,39 @@
+version: "algo-1.3.0"
+
+# Preprocessing
+blur:
+  kernel: 5
+
+# Adaptive Gaussian threshold (inverted: holes become foreground)
+threshold:
+  block_size: 51
+  c: 10
+
+# Morphological close to fill small gaps
+morphology:
+  kernel_size: 3
+  iterations: 1
+
+# External-contour filter
+contour:
+  min_area: 50.0
+
+# Hough gradient run per contour mask
+hough:
+  dp: 1.2
+  min_dist: 10
+  param1: 50
+  param2: 20
+
+# Target diameter and the radius window given to Hough
+target:
+  diameter_mm: 47.25
+  radius_tolerance_mm: 0.30
+
+# Classification bands (absolute delta from target) and absolute bounds
+tolerance:
+  min_mm: 47.000
+  max_mm: 47.500
+  ok_band_mm: 0.20
+  somewhat_ok_band_mm: 0.50
+  asymmetry_threshold_mm: 0.15

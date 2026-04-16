@@ -1,0 +1,1016 @@
+================================================================================
+                                                                                
+                   PRODUCT REQUIREMENTS DOCUMENT (PRD)                          
+                                                                                
+                        TRAILING ARM DETECTION                                  
+          Automated Defect Detection in Assembly Line Production                
+                                                                                
+================================================================================
+
+  PRODUCT       :  Trailing Arm Detection
+  DOMAIN        :  Manufacturing / Quality Inspection
+  VERSION       :  1.0  (Draft)
+  COMPANION     :  Use Case Document UC-TAD-001  +  TRD v2.0
+  AUDIENCE      :  Product Sponsor, Production Managers, Assembly Line Ops,
+                   QA, Data Science, Frontend Engineering
+  OWNERS        :  Product Lead (this doc), Production Manager (sponsor)
+
+  ELEVATOR PITCH
+  --------------
+
+     Assembly line operators today measure the innermost circle on every
+     trailing arm with a caliper. It is slow, tiring, and inconsistent
+     across shifts. Trailing Arm Detection replaces that manual step with
+     a dual-camera vision system that measures the diameter automatically
+     and shows each result on a live dashboard — so operators can focus
+     on producing, not inspecting, while every measurement is
+     traceable to a chassis number.
+
+
+
+================================================================================
+
+
++------------------------------------------------------------------------------+
+|                            TABLE OF CONTENTS                                 |
++------------------------------------------------------------------------------+
+
+   1.  Product Summary
+   2.  Problem Statement
+   3.  Product Vision and Strategy
+   4.  Target Users and Personas
+   5.  Product Goals and Success Metrics
+   6.  User Stories
+   7.  User Journeys
+   8.  Functional Requirements (Prioritised)
+   9.  Non-Functional Requirements
+  10.  User Experience Requirements
+  11.  UI Concept — Operator Dashboard
+  12.  Out of Scope
+  13.  Assumptions
+  14.  Dependencies
+  15.  Release Plan — MVP and Beyond
+  16.  Rollout and Adoption Strategy
+  17.  Product Risks and Mitigation
+  18.  Open Questions
+  19.  Glossary
+  20.  Appendix A — User Story Acceptance Criteria Format
+  21.  Appendix B — Metric Definitions
+
+
+
+================================================================================
+  1. PRODUCT SUMMARY
+================================================================================
+
+  WHAT WE ARE BUILDING
+  --------------------
+    A vision-based measurement product that automatically determines the
+    innermost circle diameter on a trailing arm using images from two
+    cameras (left and right), and displays the per-camera and overall
+    chassis results to assembly-line operators in real time.
+
+  WHY NOW
+  -------
+    Manual caliper inspection is the dominant quality bottleneck on the
+    trailing-arm station. Throughput is capped by inspection time rather
+    than by the assembly work itself. Variability between operators and
+    shifts is well documented, and defects that escape inspection cost
+    significantly more to fix downstream.
+
+  WHAT SUCCESS LOOKS LIKE  (at a glance)
+  --------------------------------------
+    - Manual caliper measurement on trailing arms is retired as the
+      primary control.
+    - Operators trust the system enough to use its output as the
+      decision of record, with a clear path to escalate when results
+      are uncertain.
+    - Every chassis has a traceable measurement record — no more paper
+      logs or missing entries.
+
+
+
+================================================================================
+  2. PROBLEM STATEMENT
+================================================================================
+
+  Today, at the trailing-arm station, every chassis is stopped so an
+  operator can measure the innermost circle with a handheld caliper and
+  record the result on a paper log or tablet. This process has three
+  problems the product must solve:
+
+    P1  SLOW.             Manual measurement is the longest step at this
+                          station. It sets the pace for the entire line.
+
+    P2  INCONSISTENT.     Different operators report slightly different
+                          numbers on the same part. Fatigue late in a
+                          shift makes this worse.
+
+    P3  WEAK TRACEABILITY.Paper logs go missing. Digital logs rely on
+                          operators to type chassis numbers correctly.
+                          When a defect is found downstream, the upstream
+                          measurement is often not recoverable.
+
+  Our product replaces that step with an automated measurement, a live
+  per-chassis log, and a durable record keyed to the chassis number
+  that the system reads directly from the image filename.
+
+
+
+================================================================================
+  3. PRODUCT VISION AND STRATEGY
+================================================================================
+
+  VISION
+  ------
+     A zero-friction, vision-driven quality check for the trailing-arm
+     station — one that operators rely on, QA audits without asking, and
+     production managers quote from without re-gathering data.
+
+  STRATEGY (three moves)
+  ----------------------
+    1.  EARN TRUST FIRST.   Ship the measurement and the live log before
+        anything else. Operators must see the system working on real
+        chassis, in their shift, with outputs they can cross-check
+        against a caliper when they want to.
+
+    2.  MAKE THE RECORD DURABLE.   Every chassis gets a traceable entry.
+        That alone solves the downstream audit problem — even before
+        the caliper is fully retired.
+
+    3.  EXPAND ONLY WHEN STABLE.   After the trailing-arm measurement
+        is stable in production, the same platform (folder monitoring
+        + classical CV + live log) can be extended to other dimensional
+        checks on the line. Out of scope for v1.
+
+  WHAT THE PRODUCT IS NOT
+  -----------------------
+     - Not a general-purpose inspection platform in v1.
+     - Not a machine-learning system. Measurement is classical CV; see
+       TRD v2.0 for the engineering rationale.
+     - Not a replacement for QA's caliper audit workflow; it coexists.
+
+
+
+================================================================================
+  4. TARGET USERS AND PERSONAS
+================================================================================
+
+  4.1  PRIMARY USER — Assembly Line Operator
+  ------------------------------------------
+     role            : Runs the trailing-arm station during a shift.
+     frequency       : Continuous use during every shift.
+     context         : On the line, standing, often gloved, under
+                       industrial lighting; attention is split between
+                       the physical part and the screen.
+     goals           : See the result quickly for every chassis; know
+                       immediately when a chassis needs a second look;
+                       finish the shift without extra paperwork.
+     frustrations    : Systems that demand a lot of clicks, require a
+                       keyboard, or hide the answer behind menus.
+     success for them: A dashboard that shows the next chassis as soon
+                       as it is measured, with a clear PASS / REVIEW /
+                       FAIL indication and a one-tap way to open the
+                       annotated image if needed.
+
+
+  4.2  SECONDARY USER — QA / Quality Engineer
+  -------------------------------------------
+     role            : Samples chassis, cross-checks with a caliper,
+                       investigates escaped defects.
+     frequency       : Several times per shift; heavier use during
+                       audits.
+     goals           : Find any chassis by chassis_no; see the
+                       measurement, the annotated image, and the
+                       version of the algorithm and calibration that
+                       produced it.
+     frustrations    : Missing records, untraceable parameter changes.
+     success for them: Every chassis is searchable; every record links
+                       to the debug image; every record pins the
+                       algorithm and calibration versions.
+
+
+  4.3  SPONSOR — Production Manager
+  ---------------------------------
+     role            : Owns line throughput and quality KPIs.
+     frequency       : Weekly review; ad-hoc during incidents.
+     goals           : See whether the station is faster, whether
+                       defects are trending down, and whether operators
+                       are adopting the system.
+     success for them: A simple rollup: shift totals, PASS / REVIEW /
+                       FAIL counts, and cycle-time impact.
+
+
+  4.4  TECHNICAL OWNER — Data Science Team
+  ----------------------------------------
+     role            : Owns the measurement algorithm and its accuracy.
+     goals           : Ship a deterministic, auditable pipeline;
+                       tune parameters against a locked eval set;
+                       publish new parameter versions safely.
+
+
+  4.5  TECHNICAL OWNER — Frontend / Integration Team
+  --------------------------------------------------
+     role            : Owns the start API, the dashboard, and the
+                       image-folder handoff from the capture system.
+     goals           : Give operators a clean, always-live log; keep
+                       the API simple to call; never require the
+                       operator to restart anything manually.
+
+
+
+================================================================================
+  5. PRODUCT GOALS AND SUCCESS METRICS
+================================================================================
+
+  Goals are expressed in three tiers, per the Phase 1 discipline: a
+  business KPI, a product metric that traces to it, and a technical
+  metric that traces to the product metric.
+
+
+  5.1  BUSINESS KPI  (sponsor level)
+  ----------------------------------
+     - Reduce the time spent on manual dimensional inspection at the
+       trailing-arm station, materially.
+     - Reduce the rate of trailing-arm defects that escape the station
+       and are caught downstream.
+     - Eliminate missing or illegible inspection records.
+
+
+  5.2  PRODUCT METRICS  (what we instrument)
+  ------------------------------------------
+
+       metric                              target       how measured
+       ----------------------------------  -----------  ---------------------
+       adoption: % of shifts using system  >= 95 %      session-started
+                                                        events per shift
+       operator trust score                >= 4 / 5     short in-dashboard
+                                                        survey, weekly
+       manual-review rate                  <= 5 %       REVIEW / total
+                                                        chassis per shift
+       record completeness                 100 %        chassis processed vs
+                                                        chassis that entered
+                                                        the station
+       UI time-to-result                   <= 2 s       event sent -> UI
+                                                        row rendered
+
+
+  5.3  TECHNICAL METRICS  (what we optimise, set in the TRD)
+  ----------------------------------------------------------
+
+       metric                   target
+       -----------------------  ----------------
+       MAE vs caliper           <= 0.05 mm
+       P95 measurement error    <= 0.10 mm
+       per-image p95 latency    <= 1.5 s
+       false-PASS rate          <= 0.1 %
+       service availability     >= 99.5 %
+
+
+
+================================================================================
+  6. USER STORIES
+================================================================================
+
+  Prioritisation:  P0 = must have for launch
+                   P1 = should have soon after launch
+                   P2 = nice to have / later release
+
+  All stories follow the format:
+     "As <role>, I want <capability>, so that <benefit>."
+
+
+  P0 — OPERATOR
+  -------------
+     US-01  As an operator, I want to start measurement for my shift
+            with a single action, so that I am not blocked on setup.
+
+     US-02  As an operator, I want to see each chassis's result appear
+            automatically as it is measured, so that I can monitor
+            produce without refreshing or hunting for data.
+
+     US-03  As an operator, I want to see both the left-camera and
+            right-camera results for a chassis and a clear overall
+            status, so that I can decide whether to pass or flag the
+            part.
+
+     US-04  As an operator, I want PASS / REVIEW / FAIL clearly
+            distinguished at a glance, so that I can respond correctly
+            under time pressure.
+
+     US-05  As an operator, I want to open the annotated image for any
+            chassis in one tap, so that I can verify borderline cases
+            without leaving the dashboard.
+
+     US-06  As an operator, I want to stop the session at end-of-shift
+            with a single action and see a summary, so that I leave a
+            clean record for the next shift.
+
+
+  P0 — QA
+  -------
+     US-07  As a QA engineer, I want to look up any chassis by
+            chassis_no and see its measurement record, so that I can
+            investigate escaped defects.
+
+     US-08  As a QA engineer, I want every record to link to the
+            annotated image, the algorithm version, and the calibration
+            version used, so that I can reproduce and audit decisions.
+
+
+  P0 — FRONTEND / INTEGRATION
+  ---------------------------
+     US-09  As the frontend integrator, I want a clearly documented
+            Start / Stop API with real-time event delivery, so that I
+            can build the operator dashboard without reverse-engineering.
+
+
+  P1 — OPERATOR
+  -------------
+     US-10  As an operator, I want the dashboard to highlight when one
+            side (L or R) of a chassis is missing, so that I can
+            intervene before the chassis leaves the station.
+
+     US-11  As an operator, I want to add a short note to a chassis
+            record (e.g. "rework requested"), so that QA can see
+            context without me typing a separate log.
+
+
+  P1 — PRODUCTION MANAGER
+  -----------------------
+     US-12  As a production manager, I want a shift summary at stop
+            time and a weekly rollup, so that I can see throughput and
+            quality trends without asking for reports.
+
+
+  P1 — QA
+  -------
+     US-13  As a QA engineer, I want to export a date-range of records
+            as CSV, so that I can do offline analysis and share with
+            plant QA leadership.
+
+
+  P2 — OPERATOR
+  -------------
+     US-14  As an operator, I want the dashboard to flash or beep when
+            a FAIL occurs, so that I cannot miss it when my attention
+            is on the physical chassis.
+
+     US-15  As an operator, I want to see cycle-time trend for my
+            shift, so that I know whether the line is healthy.
+
+
+  P2 — PRODUCTION MANAGER
+  -----------------------
+     US-16  As a production manager, I want a "calibration health"
+            indicator, so that I know when a recalibration is due
+            before drift starts affecting measurements.
+
+
+
+================================================================================
+  7. USER JOURNEYS
+================================================================================
+
+  7.1  JOURNEY — "Start of shift"
+  -------------------------------
+
+     context    : Operator arrives at the station, previous shift has
+                  ended the session.
+
+     step 1     : Operator logs in to the station tablet / screen.
+     step 2     : Operator taps "Start Session".
+     step 3     : The system confirms both cameras are calibrated and
+                  both image folders are reachable; displays an ACTIVE
+                  badge with session_id and the algorithm version.
+     step 4     : The live log is empty, ready to receive the first
+                  chassis.
+
+     success    : Within seconds of tapping Start, the dashboard is
+                  ACTIVE and visibly waiting for the first chassis.
+     failure    : If calibration is missing or a folder is unreachable,
+                  the dashboard shows a clear error and a specific
+                  resolution hint (e.g. "left camera calibration
+                  expired — contact maintenance").
+
+
+  7.2  JOURNEY — "Chassis measured"
+  ---------------------------------
+
+     step 1     : A chassis arrives at the station; the capture system
+                  writes one image to /images/left/ and one to
+                  /images/right/.
+     step 2     : Within a short time of each image appearing, the
+                  dashboard shows a new row for that camera side with
+                  diameter, status, and a thumbnail link.
+     step 3     : When both sides are present for that chassis, an
+                  overall chassis row appears with L, R, average,
+                  asymmetry, and overall status.
+     step 4     : Operator glances at the chassis row: PASS means carry
+                  on, REVIEW or FAIL means open the annotated image
+                  and decide.
+
+     success    : Operator does not need to act for PASS results;
+                  REVIEW and FAIL are unmistakable.
+
+
+  7.3  JOURNEY — "Borderline case"
+  --------------------------------
+
+     context    : A chassis returns overall_status = REVIEW because
+                  confidence was moderate on the left side.
+
+     step 1     : The REVIEW row stands out in amber on the dashboard.
+     step 2     : Operator taps the row; the annotated image opens
+                  with the detected circle highlighted and the
+                  measured diameter overlaid.
+     step 3     : Operator confirms the measurement visually, or
+                  measures with a caliper for certainty, and decides
+                  PASS or FAIL.
+     step 4     : Operator taps "Confirm PASS" or "Confirm FAIL" on
+                  the row; the dashboard records the operator decision
+                  alongside the system result (P1 — US-11 extension).
+
+     success    : The operator decision and the system result are both
+                  preserved. QA can tell which parts were confirmed
+                  manually vs auto-passed.
+
+
+  7.4  JOURNEY — "End of shift"
+  -----------------------------
+
+     step 1     : Operator taps "Stop Session".
+     step 2     : Dashboard shows a shift summary: total chassis,
+                  counts by status, any incomplete chassis (missing
+                  side).
+     step 3     : Operator optionally adds a shift note.
+     step 4     : Session is closed; the next operator can start a new
+                  one.
+
+
+  7.5  JOURNEY — "QA investigation (next day)"
+  --------------------------------------------
+
+     step 1     : QA receives a downstream report of a suspect
+                  trailing arm.
+     step 2     : QA opens the dashboard, searches by chassis_no.
+     step 3     : System returns the chassis record: left + right
+                  measurements, overall status, annotated images,
+                  algorithm version, and calibration version.
+     step 4     : QA either closes the investigation or escalates with
+                  all the evidence in one place.
+
+
+
+================================================================================
+  8. FUNCTIONAL REQUIREMENTS (PRIORITISED)
+================================================================================
+
+  P0 — MUST HAVE FOR LAUNCH
+  -------------------------
+
+     FR-01  The product shall provide a Start action that begins a
+            measurement session, confirming readiness of calibration
+            and image folders before activating.
+
+     FR-02  The product shall read chassis images from two configured
+            folders (left camera and right camera) automatically.
+
+     FR-03  The product shall identify the chassis associated with
+            each image by parsing the chassis number from the image
+            filename.
+
+     FR-04  The product shall measure the innermost circle diameter
+            for each image and emit a per-camera result in real time.
+
+     FR-05  The product shall combine the left and right per-camera
+            results for each chassis into a single overall chassis
+            result with status PASS / REVIEW / FAIL / ERROR.
+
+     FR-06  The product shall stream results to the operator dashboard
+            as they are produced, without page refresh.
+
+     FR-07  The product shall persist every measurement so that any
+            past chassis can be retrieved by chassis_no.
+
+     FR-08  The product shall provide a Stop action that ends the
+            session and shows a shift summary (totals by status,
+            incomplete chassis).
+
+     FR-09  The product shall expose the annotated image alongside
+            every measurement record.
+
+     FR-10  The product shall pin the algorithm parameter version and
+            the calibration version inside every measurement record.
+
+
+  P1 — SOON AFTER LAUNCH
+  ----------------------
+
+     FR-11  The product shall highlight chassis for which one camera
+            side has been received but not the other within the
+            current session.
+
+     FR-12  The product shall allow the operator to record a decision
+            (confirm PASS / confirm FAIL) for REVIEW chassis.
+
+     FR-13  The product shall produce a shift summary report, daily
+            rollup, and weekly rollup for the production manager.
+
+     FR-14  The product shall support CSV export of measurement records
+            for a date range.
+
+     FR-15  The product shall allow the operator to attach a short
+            free-text note to a chassis record.
+
+
+  P2 — LATER
+  ----------
+
+     FR-16  The product shall provide audible or high-contrast alerts
+            for FAIL results.
+
+     FR-17  The product shall display a "calibration health" indicator
+            based on asymmetry trend.
+
+     FR-18  The product shall allow filtering the dashboard log by
+            status and by chassis_no prefix.
+
+
+
+================================================================================
+  9. NON-FUNCTIONAL REQUIREMENTS
+================================================================================
+
+  (User-facing non-functional requirements; engineering targets are in
+  the TRD.)
+
+  9.1  Real-time feel
+       The dashboard shall show a chassis result within a couple of
+       seconds of the measurement finishing — no perceptible lag to the
+       operator.
+
+  9.2  Single-screen glanceability
+       The most recent chassis result shall always be visible without
+       scrolling on the station screen.
+
+  9.3  Reliability of the live log
+       The dashboard shall reconnect automatically if the network
+       briefly drops; no operator action shall be required to resume.
+
+  9.4  Data durability
+       Measurement records shall not be lost if the dashboard is
+       refreshed, the operator logs out, or the session is stopped.
+
+  9.5  Accessibility
+       Status colours shall not be the only signal — PASS / REVIEW /
+       FAIL shall also be distinguishable by label and icon.
+
+  9.6  Localisation
+       Interface text shall be available in the plant's operating
+       language at launch; additional languages are P1.
+
+  9.7  Trust and transparency
+       Every measurement shall be one tap away from an annotated image
+       showing what the system measured.
+
+
+
+================================================================================
+  10. USER EXPERIENCE REQUIREMENTS
+================================================================================
+
+  10.1  OPERATOR-FIRST DESIGN PRINCIPLES
+  --------------------------------------
+     - Default to one-tap actions. Typing is the exception.
+     - Show the next chassis by default, not a menu.
+     - Amber and red are reserved for REVIEW and FAIL. Default state is
+       neutral — green is used sparingly to avoid a sea of green.
+     - Every result is explainable in one image.
+
+
+  10.2  INFORMATION DENSITY
+  -------------------------
+     - The live log shows one row per camera result.
+     - The live log also shows a distinct row per chassis once both
+       sides are in. Chassis rows are visually grouped with their
+       camera rows.
+     - Per-camera thumbnails are small (hover/tap to enlarge). The
+       annotated image is full-size on tap.
+
+
+  10.3  EMPTY STATES AND ERROR STATES
+  -----------------------------------
+     - Before any chassis is processed, the log area says something
+       specific, e.g. "Waiting for the first chassis. Session started
+       at HH:MM, algorithm algo-1.2.0."
+     - When a warning event arrives (bad filename, quality skip),
+       render a warning row with the filename and the reason, not a
+       toast that disappears.
+
+
+  10.4  OFF-NOMINAL UX
+  --------------------
+     - If the SSE stream disconnects, show a persistent warning banner
+       and the last-updated timestamp. Continue to try to reconnect.
+     - If Start fails (no calibration, folder unreachable), show the
+       cause and the remediation step; do not dump a stack trace.
+     - If a session has been running for a long time with no chassis,
+       nudge the operator to confirm the station is active.
+
+
+  10.5  WHAT THE OPERATOR SHOULD NEVER SEE
+  ----------------------------------------
+     - Raw algorithm parameter names or thresholds.
+     - HTTP error codes or stack traces.
+     - Database identifiers (UUIDs) in the primary UI, though a QA
+       view may expose them for debugging.
+
+
+
+================================================================================
+  11. UI CONCEPT — OPERATOR DASHBOARD
+================================================================================
+
+  (Conceptual wireframe in plain text. Final visual design lives in the
+  design tool; this is the intent, not the pixel layout.)
+
+
+  +------------------------------------------------------------------------+
+  |  TRAILING ARM DETECTION        Session: ACTIVE since 09:10   [ STOP ]  |
+  |  algo-1.2.0  |  cal L: cal-2026-03-14-L  |  cal R: cal-2026-03-14-R    |
+  +------------------------------------------------------------------------+
+  |                                                                        |
+  |  LATEST CHASSIS                                                        |
+  |  +------------------------------------------------------------------+  |
+  |  |  MALBB51BLPM123456        OVERALL:  [ PASS ]                     |  |
+  |  |  L: 47.328 mm     R: 47.302 mm    avg 47.315   asym 0.026        |  |
+  |  |  [ view L image ]   [ view R image ]   [ add note ]              |  |
+  |  +------------------------------------------------------------------+  |
+  |                                                                        |
+  |  SHIFT SUMMARY (live)                                                  |
+  |  chassis: 184     pass: 178     review: 4     fail: 1     error: 1    |
+  |                                                                        |
+  +------------------------------------------------------------------------+
+  |                                                                        |
+  |  LOG                                                            filter |
+  |  time    chassis              side   diameter    status    image       |
+  |  09:14   MALBB51BLPM123456    L      47.328 mm   PASS      [ thumb ]   |
+  |  09:14   MALBB51BLPM123456    R      47.302 mm   PASS      [ thumb ]   |
+  |  09:14   MALBB51BLPM123456    --     47.315 mm   PASS      (summary)   |
+  |  09:13   MALBB51BLPM123455    L      47.610 mm   FAIL      [ thumb ]   |
+  |  09:13   MALBB51BLPM123455    R      47.580 mm   FAIL      [ thumb ]   |
+  |  09:13   MALBB51BLPM123455    --     47.595 mm   FAIL      (summary)   |
+  |  09:12   MALBB51BLPM123454    L      47.420 mm   REVIEW    [ thumb ]   |
+  |  ...                                                                   |
+  +------------------------------------------------------------------------+
+
+  COLOUR AND ICON INTENT (not prescriptive)
+  -----------------------------------------
+     PASS   : neutral background + check icon
+     REVIEW : amber background + ? icon
+     FAIL   : red background + X icon
+     ERROR  : grey striped + ! icon
+
+
+
+================================================================================
+  12. OUT OF SCOPE
+================================================================================
+
+  Read aloud at the sign-off meeting; require written acknowledgement.
+
+    - Any measurement other than the innermost circle on the trailing
+      arm. Other dimensional checks on the trailing arm (e.g. bushing
+      depth, bracket angles) are explicitly NOT included in v1.
+    - Any component other than the trailing arm.
+    - Camera hardware selection, mounting, lighting rigs, and physical
+      capture tuning. Owned by Plant Engineering.
+    - Direct MES / ERP integration beyond persisting measurement
+      records with traceable chassis_no.
+    - Operator user management (SSO, roles, teams). Launch uses the
+      station tablet's existing login.
+    - Automated rework or routing decisions. The product reports;
+      operators act.
+    - Mobile app. Launch UI is the station screen only.
+    - Machine learning of any kind (see TRD v2.0 ADR-001).
+
+
+
+================================================================================
+  13. ASSUMPTIONS
+================================================================================
+
+    - Camera hardware is installed, mounted, and producing images in
+      the agreed resolution and quality band.
+    - The capture system names files according to the convention in
+      TRD Section 4.2 (chassis_no embedded in filename, L or R suffix).
+    - Chassis numbers are unique and in VIN format.
+    - The plant network is reliable enough for the Frontend to
+      maintain a live event stream from the CV service during a shift.
+    - A locked eval set of 300+ chassis with caliper ground truth is
+      achievable within Phase 3.
+    - QA is available to validate outputs against caliper measurements
+      during rollout and for periodic audits thereafter.
+    - Production Managers have authority to approve retiring the
+      manual caliper as the primary control once trust is established.
+
+
+
+================================================================================
+  14. DEPENDENCIES
+================================================================================
+
+     dependency                  provider          criticality
+     --------------------------  ----------------  ---------------
+     Dual-camera image capture   Plant Engineering BLOCKING
+     Filename convention         Plant Engineering BLOCKING
+     Start API + dashboard UI    Frontend Team     BLOCKING
+     Measurement pipeline        Data Science      BLOCKING
+     Calibration workflow        Data Science +    BLOCKING
+                                 Maintenance
+     On-prem Postgres + MinIO    Platform Team     BLOCKING
+     QA caliper benchmark set    QA Team           BLOCKING for
+                                                   Phase 3 eval
+     Plant network to station    IT                BLOCKING
+
+
+
+================================================================================
+  15. RELEASE PLAN — MVP AND BEYOND
+================================================================================
+
+  15.1  MVP  (launch of v1)
+  -------------------------
+
+     Scope: all P0 user stories (US-01 through US-09) and all P0
+     functional requirements (FR-01 through FR-10).
+
+     Includes:
+        - Start / Stop session.
+        - Folder monitoring for L and R cameras.
+        - Chassis parsed from filename.
+        - Classical CV measurement, per-camera and overall.
+        - Real-time dashboard log.
+        - Measurement records searchable by chassis_no.
+        - Annotated image per measurement.
+
+     Excludes:
+        - Operator-entered notes and decisions.
+        - Exports.
+        - Shift / weekly rollup reports.
+        - Calibration health indicator.
+
+     Success criteria for v1 launch:
+        - Accuracy targets met on locked eval set (MAE <= 0.05 mm).
+        - Operator trust score >= 4 / 5 at one-week and one-month
+          checkpoints.
+        - Zero missing records during the first two weeks on one line.
+
+
+  15.2  v1.1  (weeks after launch)
+  --------------------------------
+
+     Scope: P1 user stories US-10 through US-13; functional
+     requirements FR-11 through FR-14.
+
+     Focus: close the loop for QA (exports), give production managers
+     their weekly rollup, and give operators a way to record decisions
+     on REVIEW cases.
+
+
+  15.3  v1.2  (next quarter)
+  --------------------------
+
+     Scope: P2 user stories US-14 through US-16; functional
+     requirements FR-16 through FR-18.
+
+     Focus: quality-of-life improvements and proactive calibration
+     health.
+
+
+  15.4  BEYOND v1.x
+  -----------------
+
+     Extend the platform to additional dimensional checks on the
+     trailing arm or on adjacent components. Each extension is scoped
+     with its own PRD and TRD. No extension will be started until the
+     primary measurement has been stable in production for at least
+     one quarter.
+
+
+
+================================================================================
+  16. ROLLOUT AND ADOPTION STRATEGY
+================================================================================
+
+  PHASE A — STAGING ON ONE LINE, SHADOW MODE
+  ------------------------------------------
+     - Deploy to one assembly line.
+     - Run the system alongside manual caliper measurement. Operators
+       continue to caliper; the system's outputs are recorded but not
+       used for the decision.
+     - Duration: one week minimum, extended until QA is satisfied.
+
+  PHASE B — PRIMARY MODE, SAFETY NET
+  ----------------------------------
+     - The system's result becomes the primary decision on the line.
+     - Operators retain the caliper as a spot-check tool; QA audits a
+       sample of chassis per shift with the caliper.
+     - Duration: two to four weeks.
+
+  PHASE C — FULL ROLLOUT
+  ----------------------
+     - Caliper becomes the escalation tool only (used for REVIEW
+       chassis and audits).
+     - Extend to remaining lines one at a time, each passing through
+       Phase A and B on arrival.
+
+  OPERATOR TRAINING
+  -----------------
+     - A five-minute hands-on at the station is the design target.
+     - A printed one-pager at the station covers Start, Stop, reading
+       a row, opening an image, and who to call if something is red.
+
+  COMMUNICATION
+  -------------
+     - Weekly note to operators and supervisors during Phases A and B
+       with adoption and accuracy numbers. Transparency builds trust.
+
+
+
+================================================================================
+  17. PRODUCT RISKS AND MITIGATION
+================================================================================
+
+     risk                                           impact  mitigation
+     ---------------------------------------------  ------  -----------------
+     Operators do not trust the system and keep     HIGH    Phase A shadow
+     using the caliper as primary                           mode; publish
+                                                            accuracy numbers
+                                                            weekly; make
+                                                            annotated images
+                                                            easy to inspect
+     Filename convention drift from capture system  HIGH    explicit contract
+                                                            with Plant Eng.;
+                                                            dashboard surfaces
+                                                            ERR_BAD_FILENAME
+                                                            warnings; alert
+                                                            on a spike
+     Lighting changes degrade measurement quality   HIGH    pre-launch
+                                                            lighting audit;
+                                                            monitor
+                                                            confidence
+                                                            distribution;
+                                                            recalibration
+                                                            playbook
+     QA is unavailable to build the eval set in     MEDIUM  start eval-set
+     Phase 3                                                conversation at
+                                                            kickoff; make
+                                                            scope clear
+                                                            (300 chassis, two
+                                                            annotators)
+     Dashboard is flashy but not actually usable    MEDIUM  station-side
+     on the line                                            usability test
+                                                            with real
+                                                            operators before
+                                                            launch; iterate
+     Manager reporting arrives too late to          LOW     ship v1.1 weekly
+     sustain executive support                              rollup within a
+                                                            month of v1
+     Scope creep toward additional measurements     MEDIUM  out-of-scope list
+     before v1 is stable                                    acknowledged at
+                                                            sign-off;
+                                                            extension PRDs
+                                                            are gated on
+                                                            v1 stability
+
+
+
+================================================================================
+  18. OPEN QUESTIONS
+================================================================================
+
+     Q1  What exact tolerance range does Engineering define for the
+         innermost circle diameter? (The TRD uses an illustrative
+         range; the production value must be confirmed.)
+
+     Q2  What is the required retention period for measurement records
+         under plant quality policy? (TRD assumes 2 years; confirm.)
+
+     Q3  Who approves a new algorithm parameter version before
+         promotion? (Data Science proposes; QA or Engineering
+         approves — choose one at kickoff.)
+
+     Q4  Should REVIEW chassis be held at the station until an
+         operator decision is recorded, or should they be allowed to
+         proceed with a flag? (Operations to confirm.)
+
+     Q5  Which plant operating language is required at v1 launch, and
+         which others are desirable in v1.x?
+
+     Q6  Should the dashboard allow multiple concurrent operators on
+         different stations of the same line in v1, or is single-
+         station-per-session acceptable for launch?
+
+     Q7  How will the caliper-retirement decision be formally taken
+         and communicated to operators?
+
+
+
+================================================================================
+  19. GLOSSARY
+================================================================================
+
+     Trailing arm         The suspension component under inspection.
+     Innermost circle     The smallest-radius circular feature inside
+                          the central region of the trailing arm image;
+                          the diameter the product measures.
+     Chassis              One vehicle unit progressing down the line;
+                          identified by a 17-character chassis number.
+     Chassis number       Unique 5-character VIN-format identifier;
+                          parsed from the image filename.
+     Camera side          Left (L) or Right (R).
+     Session              The interval between Start and Stop; all
+                          measurement activity happens inside a session.
+     Per-camera result    Measurement from one image.
+     Chassis result       Combined measurement for a chassis using both
+                          sides.
+     PASS / REVIEW / FAIL / ERROR  Status categories shown to operators
+                          (see TRD Section 7 for the status matrix).
+     Live log             The dashboard area that shows per-camera and
+                          chassis rows as they are produced.
+     Calibration          The camera-specific factor that converts
+                          pixel measurements into millimetres.
+     algo_params          The versioned algorithm parameter set.
+     PRD                  Product Requirements Document (this file).
+     TRD                  Technical Requirements Document (companion).
+
+
+
+================================================================================
+  20. APPENDIX A — USER STORY ACCEPTANCE CRITERIA FORMAT
+================================================================================
+
+  Every P0 and P1 user story that enters development must carry
+  acceptance criteria in the format below, added in the ticket, not
+  re-stated in this PRD.
+
+  Template:
+
+      STORY:       US-0N — <one-sentence restatement>
+      GIVEN:       <preconditions>
+      WHEN:        <action>
+      THEN:        <observable outcome>
+      AND:         <additional outcome if any>
+
+  Example for US-04 ("PASS / REVIEW / FAIL clearly distinguished"):
+
+      STORY:       US-04 — clear status at a glance
+      GIVEN:       a chassis result with overall_status = FAIL
+      WHEN:        the chassis row is rendered on the live log
+      THEN:        the row is visually distinguished from PASS rows by
+                   colour, icon, and label (not colour alone)
+      AND:         a screen-reader user hears "FAIL" when the row
+                   receives focus
+
+
+
+================================================================================
+  21. APPENDIX B — METRIC DEFINITIONS
+================================================================================
+
+  adoption (% of shifts using system)
+     numerator   : distinct shifts with at least one session_started
+                   event
+     denominator : distinct shifts with at least one chassis passing
+                   the station
+     cadence     : computed weekly
+
+  manual-review rate
+     numerator   : chassis_result events with overall_status = REVIEW
+     denominator : chassis_result events total
+     cadence     : rolling 24 h on the dashboard; weekly in the rollup
+
+  record completeness
+     numerator   : chassis with at least one measurement record in the
+                   period
+     denominator : chassis that passed the station in the period
+                   (from the production system of record)
+     cadence     : weekly
+
+  UI time-to-result
+     numerator   : p95 of (time the chassis_result row is visible in
+                   the dashboard) - (time the CV service emitted the
+                   event)
+     cadence     : continuously monitored during rollout
+
+  MAE vs caliper (technical)
+     numerator   : mean of | diameter_measured - diameter_caliper |
+                   over the locked eval set
+     cadence     : every release candidate
+
+
+================================================================================
+                          END OF DOCUMENT — PRD v1.0
+================================================================================

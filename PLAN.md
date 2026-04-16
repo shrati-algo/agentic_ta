@@ -130,46 +130,47 @@ tests/fixtures/calibration/cal-test-R.yaml
 
 **Goal**: A function that takes an image + calibration + algo_params and returns a diameter in mm. No I/O, no DB, no sessions. This is the heart of the system.
 
+**Approach**: `algo-1.3.0` — see [ADR-008](docs/decisions/ADR-008.md). The pipeline is target-driven: the operator passes a known expected diameter (e.g. 47.25 mm), and the detector only accepts circles whose radius falls in `target_diameter_mm ± radius_tolerance_mm`. This eliminates the phantom-circle problem seen with the original Canny+RANSAC pipeline on real images.
+
 ### Deliverables
 - `src/tad/measurement/__init__.py`
 - `src/tad/measurement/models.py` -- `PipelineInput`, `PipelineOutput`, `InnerCircle` (frozen dataclasses)
-- `src/tad/measurement/preprocessing.py` -- `clahe()`, `gaussian_blur()`
-- `src/tad/measurement/edges.py` -- `adaptive_canny()`
-- `src/tad/measurement/circle_detect.py` -- `hough_circles()`, `pick_innermost()`
-- `src/tad/measurement/ransac_refine.py` -- `refine_subpixel()`, `fit_circle_3pt()`
-- `src/tad/measurement/confidence.py` -- `score()`, `evaluate_status()`
-- `src/tad/measurement/annotate.py` -- `render_debug_image()`
+- `src/tad/measurement/preprocessing.py` -- `gaussian_blur()`
+- `src/tad/measurement/threshold.py` -- `adaptive_threshold()`, `morph_close()`
+- `src/tad/measurement/contour_detect.py` -- `find_candidate_contours()`, `detect_circle_in_contour()`, `detect_circle()`
+- `src/tad/measurement/confidence.py` -- `compute_confidence()`, `evaluate_status()` (band-based)
+- `src/tad/measurement/annotate.py` -- `render_debug_image()` with target reference circle
 - `src/tad/measurement/pipeline.py` -- `measure_innermost_diameter()` orchestrator
-- CLI script: `python -m tad.measurement.pipeline <image_path> <calibration_path>`
+- `src/tad/measurement/__main__.py` -- CLI entry point
+- `configs/algo_params/algo-1.3.0.yaml` -- new parameter schema
 
 ### Files to Create
 ```
 src/tad/measurement/__init__.py
 src/tad/measurement/models.py
 src/tad/measurement/preprocessing.py
-src/tad/measurement/edges.py
-src/tad/measurement/circle_detect.py
-src/tad/measurement/ransac_refine.py
+src/tad/measurement/threshold.py
+src/tad/measurement/contour_detect.py
 src/tad/measurement/confidence.py
 src/tad/measurement/annotate.py
 src/tad/measurement/pipeline.py
 src/tad/measurement/__main__.py
+configs/algo_params/algo-1.3.0.yaml
 tests/unit/test_preprocessing.py
-tests/unit/test_edges.py
-tests/unit/test_circle_detect.py
-tests/unit/test_ransac_refine.py
+tests/unit/test_threshold.py
+tests/unit/test_contour_detect.py
 tests/unit/test_confidence.py
 tests/unit/test_pipeline.py
 ```
 
 ### Test Gate
-- [ ] On fixture images, measured diameter matches expected value within 0.05 mm
-- [ ] Determinism: same image + params -> identical output (fixed RNG seed)
-- [ ] Property test: small translation/rotation of a synthetic circle image keeps diameter within tolerance
-- [ ] `pick_innermost` correctly ignores circles outside the center region
-- [ ] `ERR_NO_CIRCLE` returned when no valid circle exists
+- [ ] On fixture images, measured diameter matches target within `somewhat_ok_band_mm`
+- [ ] Determinism: same image + params -> identical output (no stochastic sampling)
+- [ ] `detect_circle` walks contours largest-first and rejects circles outside the target radius band
+- [ ] `ERR_NO_CIRCLE` returned when no contour yields a matching circle
+- [ ] Band classification covers every leg of the status matrix (PASS / REVIEW / FAIL / ERROR)
 - [ ] `make test-unit` green
-- [ ] Pipeline CLI script runs end-to-end on a fixture image
+- [ ] Pipeline CLI runs end-to-end on a fixture image and emits a debug JPG
 
 ---
 

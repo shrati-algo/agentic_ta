@@ -24,6 +24,9 @@ ENV/
 # Environment
 .env
 
+# Claude IDE local state
+.claude/
+
 # Project-specific ignores (CLAUDE.md: never commit these)
 /data/
 /models/

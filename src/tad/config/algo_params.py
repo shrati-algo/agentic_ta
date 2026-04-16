@@ -13,47 +13,53 @@ import yaml
 from pydantic import BaseModel
 
 
-class CLAHEParams(BaseModel):
-    clip_limit: float
-    tile_grid_size: tuple[int, int]
-
-
 class BlurParams(BaseModel):
     kernel: int
 
 
-class CannyParams(BaseModel):
-    lower_ratio: float
-    upper_ratio: float
+class ThresholdParams(BaseModel):
+    """Adaptive Gaussian threshold parameters (replaces Canny in v1.3+)."""
+
+    block_size: int
+    c: int
+
+
+class MorphologyParams(BaseModel):
+    """Morphological close parameters applied after thresholding."""
+
+    kernel_size: int
+    iterations: int
+
+
+class ContourParams(BaseModel):
+    """Contour-filter parameters before masked Hough."""
+
+    min_area: float
 
 
 class HoughParams(BaseModel):
+    """Hough gradient parameters (run on each contour mask)."""
+
     dp: float
     min_dist: int
     param1: int
     param2: int
-    min_radius_px: int
-    max_radius_px: int
 
 
-class CenterRegionParams(BaseModel):
-    inner_fraction: float
+class TargetParams(BaseModel):
+    """Target diameter and radius-window used to constrain Hough."""
 
-
-class RansacParams(BaseModel):
-    iterations: int
-    inlier_threshold_px: float
-    seed: int = 42
-
-
-class ConfidenceParams(BaseModel):
-    conf_pass: float
-    conf_review: float
+    diameter_mm: float
+    radius_tolerance_mm: float
 
 
 class ToleranceParams(BaseModel):
+    """Classification bands and absolute tolerance window."""
+
     min_mm: float
     max_mm: float
+    ok_band_mm: float
+    somewhat_ok_band_mm: float
     asymmetry_threshold_mm: float
 
 
@@ -61,13 +67,12 @@ class AlgoParams(BaseModel):
     """Top-level algorithm parameter set, pinned by version string."""
 
     version: str
-    clahe: CLAHEParams
     blur: BlurParams
-    canny: CannyParams
+    threshold: ThresholdParams
+    morphology: MorphologyParams
+    contour: ContourParams
     hough: HoughParams
-    center_region: CenterRegionParams
-    ransac: RansacParams
-    confidence: ConfidenceParams
+    target: TargetParams
     tolerance: ToleranceParams
 
 
@@ -84,7 +89,7 @@ def load_algo_params(version: str, *, base_dir: Path | None = None) -> AlgoParam
     Parameters
     ----------
     version:
-        The version identifier, e.g. ``"algo-1.2.0"``.
+        The version identifier, e.g. ``"algo-1.3.0"``.
     base_dir:
         Override the directory to search in (useful for tests).
 

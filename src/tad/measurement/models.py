@@ -20,35 +20,51 @@ class InnerCircle:
     cx: int
     cy: int
     radius_px: float
-    peak: float = 0.0  # Hough accumulator strength (0-1 normalised)
+    peak: float = 0.0  # Hough accumulator strength (0-1 normalised, informational)
 
 
 @dataclass(frozen=True)
 class PipelineInput:
-    """Everything the pipeline needs to produce a measurement."""
+    """Everything the pipeline needs to produce a measurement.
+
+    The contour-based detector needs a target diameter to know which
+    scale of circle to look for.  The tolerance bands in ``tolerance_*``
+    drive the PASS / REVIEW / FAIL classification.
+    """
 
     image_bgr: np.ndarray[Any, Any]
     calibration_mm_per_px: float
     algo_params_version: str
 
-    # Unpacked algo_params (avoids importing config models into the pure layer)
-    clahe_clip_limit: float = 2.0
-    clahe_tile_grid_size: tuple[int, int] = (8, 8)
+    # Preprocessing
     blur_kernel: int = 5
-    canny_lower_ratio: float = 0.66
-    canny_upper_ratio: float = 1.33
+
+    # Adaptive threshold
+    threshold_block_size: int = 51
+    threshold_c: int = 10
+
+    # Morphology
+    morph_kernel_size: int = 3
+    morph_iterations: int = 1
+
+    # Contour filter
+    contour_min_area: float = 50.0
+
+    # Target diameter + Hough radius window
+    target_diameter_mm: float = 47.25
+    radius_tolerance_mm: float = 0.3
+
+    # Hough tuning
     hough_dp: float = 1.2
-    hough_min_dist: int = 40
-    hough_param1: int = 100
-    hough_param2: int = 30
-    hough_min_radius_px: int = 40
-    hough_max_radius_px: int = 160
-    center_inner_fraction: float = 0.7
-    ransac_iterations: int = 200
-    ransac_inlier_threshold_px: float = 1.0
-    ransac_seed: int = 42
-    conf_pass: float = 0.85
-    conf_review: float = 0.60
+    hough_min_dist: int = 10
+    hough_param1: int = 50
+    hough_param2: int = 20
+
+    # Classification bands (absolute delta from target in mm)
+    ok_band_mm: float = 0.2
+    somewhat_ok_band_mm: float = 0.5
+
+    # Absolute tolerance bounds (FAIL if outside, from TRD 5.1)
     tolerance_min_mm: float = 47.0
     tolerance_max_mm: float = 47.5
 

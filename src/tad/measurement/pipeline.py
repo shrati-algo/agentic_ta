@@ -1,117 +1,111 @@
 """Measurement pipeline orchestrator.
 
-This is the top-level entry point for measuring the innermost circle
-diameter from a single image.  It is **pure** — no I/O, no database,
-no filesystem, no sessions.  It takes an image and returns a result.
+Top-level entry point for measuring the innermost circle diameter from a
+single image.  The pipeline is **pure** — no I/O, no database, no
+filesystem, no sessions.  It takes an image and returns a result.
+
+Pipeline stages (TRD Section 6):
+
+    1.  BGR -> grayscale
+    2.  Gaussian blur
+    3.  Adaptive Gaussian threshold (inverted -> holes become foreground)
+    4.  Morphological close
+    5.  External contour extraction, sorted largest-area first
+    6.  For each contour (masked), run cv2.HoughCircles constrained to
+        the target radius window (``target_diameter_mm +/- radius_tolerance_mm``)
+    7.  First matching circle wins
+    8.  Diameter in mm = 2 * radius_px * mm_per_px
+    9.  Band classification -> PASS / REVIEW / FAIL
+    10. Annotated debug image (detected circle + target reference circle)
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 import cv2
-import numpy as np
 
 from tad.measurement.annotate import render_debug_image
-from tad.measurement.circle_detect import hough_circles, pick_innermost
-from tad.measurement.confidence import evaluate_status, score
-from tad.measurement.edges import adaptive_canny
+from tad.measurement.confidence import compute_confidence, evaluate_status
+from tad.measurement.contour_detect import detect_circle
 from tad.measurement.models import PipelineInput, PipelineOutput
-from tad.measurement.preprocessing import clahe, gaussian_blur
-from tad.measurement.ransac_refine import refine_subpixel
+from tad.measurement.preprocessing import gaussian_blur
+from tad.measurement.threshold import adaptive_threshold, morph_close
 
 
 def measure_innermost_diameter(inp: PipelineInput) -> PipelineOutput:
-    """Run the full measurement pipeline on a single image.
-
-    Steps (TRD Section 6):
-        1.  Convert to grayscale
-        2.  CLAHE contrast normalisation
-        3.  Gaussian blur
-        4.  Adaptive Canny edge detection
-        5.  Hough circle detection
-        6.  Pick innermost circle in the central region
-        7.  RANSAC sub-pixel refinement
-        8.  Confidence scoring
-        9.  Status evaluation (PASS / FAIL / REVIEW / ERROR)
-        10. Render annotated debug image
-
-    Parameters
-    ----------
-    inp:
-        A :class:`PipelineInput` containing the image, calibration,
-        and algorithm parameters.
-
-    Returns
-    -------
-    PipelineOutput
-        The measurement result, always including an annotated debug image.
-    """
-    # Step 1: grayscale
+    """Run the full measurement pipeline on a single image."""
+    # 1. Grayscale
     gray = cv2.cvtColor(inp.image_bgr, cv2.COLOR_BGR2GRAY)
 
-    # Step 2: CLAHE
-    norm = clahe(gray, inp.clahe_clip_limit, inp.clahe_tile_grid_size)
+    # 2. Gaussian blur
+    blurred = gaussian_blur(gray, inp.blur_kernel)
 
-    # Step 3: Gaussian blur
-    blurred = gaussian_blur(norm, inp.blur_kernel)
-
-    # Step 4: adaptive Canny
-    edges = adaptive_canny(blurred, inp.canny_lower_ratio, inp.canny_upper_ratio)
-
-    # Step 5: Hough circle detection
-    circles = hough_circles(
+    # 3. Adaptive threshold (inverted: holes become foreground)
+    binary = adaptive_threshold(
         blurred,
+        block_size=inp.threshold_block_size,
+        c=inp.threshold_c,
+    )
+
+    # 4. Morphological close
+    cleaned = morph_close(
+        binary,
+        kernel_size=inp.morph_kernel_size,
+        iterations=inp.morph_iterations,
+    )
+
+    # 5-7. Contour iteration + masked Hough
+    circle = detect_circle(
+        gray,
+        cleaned,
+        mm_per_px=inp.calibration_mm_per_px,
+        target_diameter_mm=inp.target_diameter_mm,
+        radius_tolerance_mm=inp.radius_tolerance_mm,
+        min_contour_area=inp.contour_min_area,
         dp=inp.hough_dp,
         min_dist=inp.hough_min_dist,
         param1=inp.hough_param1,
         param2=inp.hough_param2,
-        min_radius=inp.hough_min_radius_px,
-        max_radius=inp.hough_max_radius_px,
     )
 
-    if circles is None or len(circles[0]) == 0:
-        return _error(inp, "ERR_NO_CIRCLE", "no circles detected", all_circles=None)
+    if circle is None:
+        return _error(inp, "ERR_NO_CIRCLE", "no circle matching target radius")
 
-    # Step 6: pick innermost in the central region
-    inner = pick_innermost(circles, inp.image_bgr.shape, inp.center_inner_fraction)
+    # 8. Diameter in mm
+    diameter_mm = 2.0 * circle.radius_px * inp.calibration_mm_per_px
 
-    if inner is None:
-        return _error(inp, "ERR_NO_CIRCLE", "no circle centred inside region", all_circles=circles)
-
-    # Step 7: RANSAC sub-pixel refinement
-    refined, ransac_residual = refine_subpixel(
-        edges,
-        inner,
-        iterations=inp.ransac_iterations,
-        inlier_threshold_px=inp.ransac_inlier_threshold_px,
-        rng_seed=inp.ransac_seed,
-    )
-
-    # Step 8: confidence
-    conf = score(hough_peak=inner.peak, ransac_residual=ransac_residual)
-
-    # Step 9: diameter and status
-    diameter_mm = 2.0 * refined.radius_px * inp.calibration_mm_per_px
+    # 9. Classification
     status = evaluate_status(
         diameter_mm,
-        conf,
-        conf_pass=inp.conf_pass,
-        conf_review=inp.conf_review,
+        inp.target_diameter_mm,
+        ok_band_mm=inp.ok_band_mm,
+        somewhat_ok_band_mm=inp.somewhat_ok_band_mm,
         tolerance_min_mm=inp.tolerance_min_mm,
         tolerance_max_mm=inp.tolerance_max_mm,
     )
 
-    # Step 10: annotated debug image
+    # Confidence is informational: linear in delta from target
+    confidence = compute_confidence(
+        diameter_mm,
+        inp.target_diameter_mm,
+        somewhat_ok_band_mm=inp.somewhat_ok_band_mm,
+    )
+
+    # 10. Debug image
     annotated = render_debug_image(
-        inp.image_bgr, refined, diameter_mm, status, conf, all_circles=circles
+        inp.image_bgr,
+        circle,
+        diameter_mm,
+        status,
+        confidence,
+        target_diameter_mm=inp.target_diameter_mm,
+        mm_per_px=inp.calibration_mm_per_px,
     )
 
     return PipelineOutput(
         diameter_mm=diameter_mm,
         status=status,
-        confidence=conf,
-        circle=(refined.cx, refined.cy, refined.radius_px),
+        confidence=confidence,
+        circle=(circle.cx, circle.cy, circle.radius_px),
         error_code=None,
         annotated_image=annotated,
     )
@@ -121,17 +115,21 @@ def _error(
     inp: PipelineInput,
     code: str,
     message: str,
-    *,
-    all_circles: np.ndarray[Any, Any] | None,
 ) -> PipelineOutput:
-    """Build an ERROR output with a debug image showing what went wrong."""
+    """Build an ERROR output with a debug image showing what went wrong.
+
+    The ``message`` parameter is accepted for API symmetry and future use
+    (embedding it in the annotated image); it is currently unused.
+    """
+    del message  # reserved for future debug-image inclusion
     annotated = render_debug_image(
         inp.image_bgr,
         circle=None,
         diameter_mm=None,
         status="ERROR",
         confidence=None,
-        all_circles=all_circles,
+        target_diameter_mm=inp.target_diameter_mm,
+        mm_per_px=inp.calibration_mm_per_px,
     )
     return PipelineOutput(
         diameter_mm=None,
