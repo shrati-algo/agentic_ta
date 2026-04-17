@@ -1,4 +1,4 @@
-.PHONY: up down migrate seed serve test test-unit test-integration eval lint format build \
+.PHONY: up down migrate seed serve demo test test-unit test-integration eval lint format build \
         dev-ui install-ui test-ui build-ui
 
 up:
@@ -15,6 +15,11 @@ seed:
 
 serve:
 	uvicorn tad.main:app --reload --host 0.0.0.0 --port 8000
+
+# Run the backend in demo mode: in-memory storage, no Docker required.
+# Use this when you just want to boot the UI end-to-end locally.
+demo:
+	python scripts/run_demo.py
 
 test: lint
 	pytest
