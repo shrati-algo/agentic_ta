@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { getDashboardSummary } from "../api/dashboard";
-import { getReplayStatus, startReplay, type ReplayStatus } from "../api/demo";
+import { getReplayStatus, startReplay } from "../api/demo";
 import type { DashboardSummary } from "../api/types";
 import { AlertsList } from "../components/AlertsList";
 import { FiltersBar, type Filters } from "../components/FiltersBar";
@@ -16,20 +16,16 @@ import { useLiveSession } from "../hooks/useLiveSession";
 export function Dashboard() {
   const { sessionId, connected, lastEvent } = useLiveSession();
 
-  // Demo replay: auto-start on first Dashboard mount --------------------
-  const [replay, setReplay] = useState<ReplayStatus | null>(null);
+  // Demo replay: auto-start on first Dashboard mount so the table
+  // populates without manual curl calls. The user-visible banner
+  // was removed -- replay still runs silently in the background.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const current = await getReplayStatus();
-        if (cancelled) return;
-        if (current.running) {
-          setReplay(current);
-          return;
-        }
-        const started = await startReplay({ interval_seconds: 20 });
-        if (!cancelled) setReplay(started);
+        if (cancelled || current.running) return;
+        await startReplay({ interval_seconds: 20 });
       } catch {
         /* demo replay not available -- ignore silently */
       }
@@ -37,19 +33,6 @@ export function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  // Poll replay status every 5s so the banner stays fresh
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const s = await getReplayStatus();
-        setReplay(s);
-      } catch {
-        /* ignore */
-      }
-    }, 5000);
-    return () => clearInterval(interval);
   }, []);
 
   // Filters ------------------------------------------------------------------
@@ -62,11 +45,23 @@ export function Dashboard() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
-  // Re-fetch on SSE chassis_result events
+  // Fallback poll: bump every 5s so the table + KPIs refresh even if
+  // the SSE stream is still reconnecting or the initial session probe
+  // hadn't landed yet. SSE events still trigger an immediate refresh
+  // via `lastEvent`; this just prevents staleness when SSE is silent.
+  const [pollTick, setPollTick] = useState(0);
+  useEffect(() => {
+    const iv = setInterval(() => setPollTick((n) => n + 1), 5000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Re-fetch on SSE chassis_result events OR the 5s poll tick.
   const refreshKey = useMemo(() => {
-    if (!lastEvent) return 0;
-    return lastEvent.type === "chassis_result" ? lastEvent.at : 0;
-  }, [lastEvent]);
+    const sseAt =
+      lastEvent && lastEvent.type === "chassis_result" ? lastEvent.at : 0;
+    // Combine both so either source invalidates the memo.
+    return sseAt + pollTick;
+  }, [lastEvent, pollTick]);
 
   const listParams = useMemo(
     () => ({
@@ -102,23 +97,6 @@ export function Dashboard() {
     <div className="min-h-screen bg-slate-50">
       <Header connected={connected} sessionId={sessionId} />
       <main className="mx-auto max-w-7xl px-6 py-6">
-        {replay && replay.total_pairs > 0 && (
-          <div className="mb-4 flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-xs">
-            <span className="text-blue-900">
-              <span className="font-semibold">Demo replay:</span>{" "}
-              {replay.running ? "streaming" : "complete"} —{" "}
-              {replay.pairs_sent} / {replay.total_pairs} chassis sent at{" "}
-              {replay.interval_seconds}s intervals
-            </span>
-            {replay.running && (
-              <span className="flex items-center gap-1 text-blue-600">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
-                live
-              </span>
-            )}
-          </div>
-        )}
-
         {/* KPI row */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <KpiDonut

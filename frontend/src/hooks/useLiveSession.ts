@@ -28,17 +28,36 @@ export function useLiveSession(): LiveSessionState {
 
   useEffect(() => {
     let cancelled = false;
-    getActiveSession()
-      .then((s) => {
-        if (!cancelled) {
-          setSessionId(s ? s.session_id : null);
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    // Poll /v1/sessions?status=ACTIVE until we find a session, then stop.
+    // The Dashboard kicks off the demo replay (and therefore creates the
+    // session) after mount, so the very first probe often returns null --
+    // before this retry loop the SSE subscription never attached and the
+    // UI could only refresh via a hard reload. With the retry the
+    // subscription attaches as soon as the session exists.
+    const probe = async (): Promise<void> => {
+      try {
+        const s = await getActiveSession();
+        if (cancelled) return;
+        if (s) {
+          setSessionId(s.session_id);
+          if (timer) {
+            clearInterval(timer);
+            timer = null;
+          }
         }
-      })
-      .catch(() => {
-        if (!cancelled) setSessionId(null);
-      });
+      } catch {
+        /* swallow -- try again on next tick */
+      }
+    };
+
+    void probe();
+    timer = setInterval(probe, 2000);
+
     return () => {
       cancelled = true;
+      if (timer) clearInterval(timer);
     };
   }, []);
 

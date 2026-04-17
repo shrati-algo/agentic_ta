@@ -1,4 +1,15 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+/**
+ * Fill the sign-in form that's currently displayed and submit. Assumes
+ * the page is already on /login (either because the user went there
+ * directly or because ProtectedRoute redirected them). After submission
+ * the user lands on the original target (state.from) or /home.
+ */
+async function submitSignIn(page: Page): Promise<void> {
+  await page.getByRole("textbox", { name: "Password" }).fill("test-pass");
+  await page.getByRole("button", { name: /Sign In/i }).click();
+}
 
 /**
  * Detail page flow: Correct Violation + Flag.  Seeds a chassis
@@ -31,8 +42,13 @@ test.describe("Violation Detail", () => {
 
     expect(chassisId).toBeTruthy();
 
-    // Navigate straight to the detail page
+    // Routes are protected -- visit the detail URL first, which the
+    // ProtectedRoute bounces to /login while remembering where we
+    // were going, then sign in and verify we landed back on it.
     await page.goto(`/home/details/${chassisId}`);
+    await expect(page).toHaveURL(/\/login$/);
+    await submitSignIn(page);
+    await expect(page).toHaveURL(new RegExp(`/home/details/${chassisId}$`));
     await expect(page.getByRole("heading", { level: 1, name: /Violation Detail/i })).toBeVisible();
 
     // Click "Correct Violation" on the first CameraCard (Cam1)

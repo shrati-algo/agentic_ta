@@ -34,12 +34,18 @@ export function Header({ connected, sessionId }: Props) {
           >
             Home
           </NavLink>
-          <span className="cursor-not-allowed rounded px-3 py-1.5 text-sm font-medium text-slate-400">
-            Live View
-          </span>
-          <span className="cursor-not-allowed rounded px-3 py-1.5 text-sm font-medium text-slate-400">
+          <NavLink
+            to={ROUTES.settings}
+            className={({ isActive }) =>
+              `rounded px-3 py-1.5 text-sm font-medium transition ${
+                isActive
+                  ? "bg-slate-900 text-white"
+                  : "text-slate-600 hover:bg-slate-100"
+              }`
+            }
+          >
             Settings
-          </span>
+          </NavLink>
         </nav>
 
         <div className="flex items-center gap-3">

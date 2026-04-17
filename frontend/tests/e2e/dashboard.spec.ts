@@ -1,5 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 
+async function signIn(page: Page): Promise<void> {
+  await page.goto("/login");
+  await page.getByRole("textbox", { name: "Password" }).fill("test-pass");
+  await page.getByRole("button", { name: /Sign In/i }).click();
+  await expect(page).toHaveURL(/\/home$/);
+}
+
 /**
  * End-to-end flow: dashboard -> violation detail -> decision.
  *
@@ -32,22 +39,22 @@ async function seedSome(page: Page, count = 3) {
 
 test.describe("Dashboard", () => {
   test("loads, shows the three KPI cards, and redirects / -> /home", async ({ page }) => {
-    await page.goto("/");
+    await signIn(page);
     await expect(page).toHaveURL(/\/home$/);
 
-    await expect(page.getByText("Violations Today")).toBeVisible();
-    await expect(page.getByText("Violation Trend")).toBeVisible();
-    await expect(page.getByText("Recent Alerts")).toBeVisible();
-    await expect(page.getByText("Production Details")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Violations Today" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Violation Trend" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Recent Alerts" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Production Details" })).toBeVisible();
 
     // Header
     await expect(page.getByRole("link", { name: "Home" })).toBeVisible();
-    await expect(page.getByText("Live View")).toBeVisible();
+    await expect(page.getByText("Settings")).toBeVisible();
   });
 
   test("row click opens violation detail page", async ({ page }) => {
     await seedSome(page, 3);
-    await page.goto("/home");
+    await signIn(page);
 
     // Wait for at least one data row (skip the header row)
     const row = page.locator("tbody tr").first();
