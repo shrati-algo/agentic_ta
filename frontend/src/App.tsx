@@ -4,6 +4,7 @@ import { AuthProvider } from "./auth/AuthContext";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
+import { Settings } from "./pages/Settings";
 import { ViolationDetail } from "./pages/ViolationDetail";
 import { ROUTES } from "./routes";
 
@@ -27,6 +28,14 @@ export function App() {
             element={
               <ProtectedRoute>
                 <ViolationDetail />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path={ROUTES.settings}
+            element={
+              <ProtectedRoute>
+                <Settings />
               </ProtectedRoute>
             }
           />
