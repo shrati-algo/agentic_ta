@@ -1,4 +1,4 @@
-.PHONY: up down migrate seed serve demo test test-unit test-integration eval lint format build \
+.PHONY: up down migrate seed serve demo demo-seed test test-unit test-integration eval lint format build \
         dev-ui install-ui test-ui build-ui
 
 up:
@@ -20,6 +20,12 @@ serve:
 # Use this when you just want to boot the UI end-to-end locally.
 demo:
 	python scripts/run_demo.py
+
+# Drop a handful of matched chassis image pairs into the watched folders
+# while `make demo` is running -- watch the dashboard fill up live.
+# Usage: `make demo-seed` (defaults to 5 pairs) or `python scripts/seed_demo.py 20`.
+demo-seed:
+	python scripts/seed_demo.py
 
 test: lint
 	pytest

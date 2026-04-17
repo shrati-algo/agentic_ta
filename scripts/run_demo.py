@@ -63,9 +63,30 @@ def main() -> None:
         log_level="INFO",
     )
 
+    # Demo-friendly algo params: relax target to 20 mm so both the
+    # committed real fixtures (cam18jdleofhtlhj6_{L,R}.jpg ~ 19.8 mm)
+    # and the synthetic seed images produced by `make demo-seed` detect.
+    algo = load_algo_params(settings.algo_params_version, base_dir=configs / "algo_params")
+    algo = algo.model_copy(
+        update={
+            "target": algo.target.model_copy(
+                update={"diameter_mm": 20.0, "radius_tolerance_mm": 2.0}
+            ),
+            "tolerance": algo.tolerance.model_copy(
+                update={
+                    "min_mm": 15.0,
+                    "max_mm": 25.0,
+                    "ok_band_mm": 0.5,
+                    "somewhat_ok_band_mm": 2.0,
+                }
+            ),
+            "hough": algo.hough.model_copy(update={"param2": 15}),
+        }
+    )
+
     app = create_app(
         settings=settings,
-        algo_params=load_algo_params(settings.algo_params_version, base_dir=configs / "algo_params"),
+        algo_params=algo,
         left_calibration=load_calibration(settings.default_calibration_left),
         right_calibration=load_calibration(settings.default_calibration_right),
         session_repo=InMemorySessionRepository(),
