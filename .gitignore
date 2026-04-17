@@ -54,3 +54,5 @@ notebooks/.ipynb_checkpoints/
 
 # uv
 .python-version
+frontend/test-results/
+frontend/playwright-report/

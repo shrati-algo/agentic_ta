@@ -1,0 +1,3 @@
+chassis_no,image_path,side,caliper_mm,target_diameter_mm,calibration
+MALBB51BLPM123456,tests/fixtures/images/cam18jdleofhtlhj6_L.jpg,L,19.82,20.0,cal-2026-03-14-L
+MALBB51BLPM123456,tests/fixtures/images/cam18jdleofhtlhj6_R.jpg,R,19.55,20.0,cal-2026-03-14-R

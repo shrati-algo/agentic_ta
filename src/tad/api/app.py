@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from tad.api.errors import register_exception_handlers
 from tad.api.middleware import RequestIdMiddleware
@@ -113,7 +115,39 @@ def create_app(
     app.include_router(dashboard_router)
     app.include_router(meas_router)
     app.include_router(demo_router)
+
+    _mount_frontend(app)
+
     return app
+
+
+def _mount_frontend(app: FastAPI) -> None:
+    """Serve ``frontend/dist/`` at the root path with SPA fallback.
+
+    Looks for a built frontend bundle relative to the project root; if
+    none exists (dev-only install), leaves the app alone so Vite can
+    run on :5173 and proxy /v1/*.  Mounted *after* all API routers so
+    /v1/*, /docs, and /openapi.json take precedence over the
+    catch-all.
+    """
+    dist = Path(__file__).resolve().parents[3] / "frontend" / "dist"
+    index = dist / "index.html"
+    if not index.is_file():
+        return
+
+    assets_dir = dist / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str) -> FileResponse:
+        # API paths are handled by their routers above; anything
+        # that reaches this handler is a client-side route or an
+        # asset that doesn't exist in /assets (e.g. favicon).
+        candidate = dist / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(index)
 
 
 __all__ = ["create_app"]
