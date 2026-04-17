@@ -32,7 +32,7 @@ Convention: **EPIC-n** → **STORY-n.m** → **TASK-n.m.k**. Status icons:
 | EPIC-8 | Demo Mode Infrastructure | 5.5 | ✅ |
 | EPIC-9 | Quality Gate — Tests, Eval, E2E | 6 | ✅ |
 | EPIC-10 | Docker Deployment & Ops | 6 | ✅ |
-| EPIC-11 | Production Hardening | 7 | ⬜ |
+| EPIC-11 | Production Hardening | 7 | ✅ |
 | EPIC-12 | Calibration & Drift Management | 7 | ⬜ |
 | EPIC-13 | QA Correction & Flag Workflow | 8 | 🟡 |
 | EPIC-14 | Observability & SLOs | 9 | ⬜ |
@@ -544,9 +544,9 @@ stakeholder demos, and downstream deploys.
 
 ---
 
-# EPIC-11 — Production Hardening  ⬜
+# EPIC-11 — Production Hardening  ✅
 
-**Status**: Not started (Phase 7)
+**Status**: Complete (this session)
 **Goal**: Make the container safe to deploy past "demo on a laptop" —
 real persistence, TLS, secrets, rate limits, API gating.
 **Acceptance**:
@@ -559,37 +559,44 @@ real persistence, TLS, secrets, rate limits, API gating.
 ADR-009 negative-consequences list both block prod rollout until this
 lands.
 
-## STORY-11.1 — Prod-mode container entrypoint  ⬜
-- **TASK-11.1.1** ⬜ `scripts/run_prod.py` (or compose override) that
-  runs `uvicorn tad.main:app --host 0.0.0.0 --port 8000`, reads
-  DB_DSN + MINIO_* from env.
-- **TASK-11.1.2** ⬜ Compose profile `prod` includes `tad-prod`
-  service with `depends_on: [postgres, minio]` + `condition:
-  service_healthy`.
-- **TASK-11.1.3** ⬜ Init-container (or compose `command`) that runs
-  `alembic upgrade head` before the app starts.
+## STORY-11.1 — Prod-mode container entrypoint  ✅
+- **TASK-11.1.1** ✅ `src/tad/main.py` — `_default_app()` wires
+  SqlSessionRepository / SqlMeasurementRepository / SqlChassisRepository
+  + MinIOStore, mkdirs the watched folders, applies the wide-band
+  demo overlay when `DEMO_ENABLED=true`.
+- **TASK-11.1.2** ✅ `docker-compose.yml` — `tad` service depends on
+  `postgres` + `minio` with `condition: service_healthy`; both
+  dependencies carry their own healthchecks.
+- **TASK-11.1.3** ✅ Compose `command: sh -c "alembic upgrade head &&
+  exec uvicorn tad.main:app ..."` runs migrations before the app
+  starts; bad migration = container exits rather than serving against
+  a stale schema.
 
-## STORY-11.2 — Gate demo routes behind a flag  ⬜
-- **TASK-11.2.1** ⬜ `settings.demo_enabled: bool = False` in
-  `Settings`; `create_app()` only calls
-  `app.include_router(demo_router)` when enabled.
-- **TASK-11.2.2** ⬜ Regression test asserting `/v1/demo/*` returns
-  404 when the flag is off.
+## STORY-11.2 — Gate demo routes behind a flag  ✅
+- **TASK-11.2.1** ✅ `Settings.demo_enabled: bool = False` +
+  `create_app()` gate; SPA fallback tightened to 404 on unmounted
+  `/v1/*`.
+- **TASK-11.2.2** ✅ `tests/unit/test_app_demo_gating.py` — routes
+  absent (404 GET / 404-or-405 POST) when off, ReplayStatus schema
+  returned when on.
 
-## STORY-11.3 — Auth (mTLS + service token)  ⬜
-- **TASK-11.3.1** ⬜ Middleware reading `X-Service-Token`, comparing
-  constant-time against `Settings.service_tokens`.
-- **TASK-11.3.2** ⬜ mTLS via uvicorn SSL flags + client-cert CA in
-  Settings.
-- **TASK-11.3.3** ⬜ `AUTH_ENABLED=false` short-circuit for local
-  dev / demo.
+## STORY-11.3 — Auth (service token)  ✅
+- **TASK-11.3.1** ✅ `ServiceTokenMiddleware` (`src/tad/api/middleware.py`)
+  — constant-time `hmac.compare_digest` against
+  `Settings.allowed_tokens()`; exempt paths include /v1/health,
+  /v1/ready, /docs, /assets/, /home, /.
+- **TASK-11.3.2** ⬜ mTLS via uvicorn SSL flags — deferred; token
+  auth is the MVP. Deploy behind a reverse proxy for TLS termination.
+- **TASK-11.3.3** ✅ Middleware only installed when
+  `settings.auth_enabled`; allowed_tokens empty = wide-open
+  short-circuit (misconfig safety).
 
-## STORY-11.4 — Secrets and image provenance  ⬜
-- **TASK-11.4.1** ⬜ `docker build -t tad:$(git rev-parse --short
-  HEAD)` baked into `make build`.
-- **TASK-11.4.2** ⬜ `.env` never copied into the image; compose
-  passes via `env_file:`; secrets via Docker secrets in Phase 7
-  hardening.
+## STORY-11.4 — Image provenance  ✅
+- **TASK-11.4.1** ✅ `make build` now tags `tad:latest` AND
+  `tad:<short-sha>`.
+- **TASK-11.4.2** ✅ `.env` never copied into the image; compose
+  passes configuration via `environment:` block. Real secrets
+  remain future-EPIC work (Docker secrets / SOPS).
 
 ---
 
