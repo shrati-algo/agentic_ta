@@ -49,7 +49,7 @@ test.describe("Dashboard", () => {
 
     // Header
     await expect(page.getByRole("link", { name: "Home" })).toBeVisible();
-    await expect(page.getByText("Live View")).toBeVisible();
+    await expect(page.getByText("Settings")).toBeVisible();
   });
 
   test("row click opens violation detail page", async ({ page }) => {
