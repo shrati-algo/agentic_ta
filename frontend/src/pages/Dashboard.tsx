@@ -45,11 +45,23 @@ export function Dashboard() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
-  // Re-fetch on SSE chassis_result events
+  // Fallback poll: bump every 5s so the table + KPIs refresh even if
+  // the SSE stream is still reconnecting or the initial session probe
+  // hadn't landed yet. SSE events still trigger an immediate refresh
+  // via `lastEvent`; this just prevents staleness when SSE is silent.
+  const [pollTick, setPollTick] = useState(0);
+  useEffect(() => {
+    const iv = setInterval(() => setPollTick((n) => n + 1), 5000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Re-fetch on SSE chassis_result events OR the 5s poll tick.
   const refreshKey = useMemo(() => {
-    if (!lastEvent) return 0;
-    return lastEvent.type === "chassis_result" ? lastEvent.at : 0;
-  }, [lastEvent]);
+    const sseAt =
+      lastEvent && lastEvent.type === "chassis_result" ? lastEvent.at : 0;
+    // Combine both so either source invalidates the memo.
+    return sseAt + pollTick;
+  }, [lastEvent, pollTick]);
 
   const listParams = useMemo(
     () => ({
