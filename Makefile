@@ -1,4 +1,5 @@
-.PHONY: up down migrate seed serve test test-unit test-integration eval lint format build
+.PHONY: up down migrate seed serve test test-unit test-integration eval lint format build \
+        dev-ui install-ui test-ui build-ui
 
 up:
 	docker compose up -d
@@ -38,3 +39,17 @@ format:
 
 build:
 	docker build -t tad:$$(git rev-parse --short HEAD) .
+
+# ---- Frontend ------------------------------------------------------------
+
+install-ui:
+	cd frontend && npm install
+
+dev-ui:
+	cd frontend && npm run dev
+
+test-ui:
+	cd frontend && npm test
+
+build-ui:
+	cd frontend && npm run build
