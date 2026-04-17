@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 /**
  * End-to-end flow: dashboard -> violation detail -> decision.
@@ -9,7 +9,7 @@ import { expect, test } from "@playwright/test";
  * test doesn't depend on the 20-second replay cadence.
  */
 
-async function seedSome(page, count = 3) {
+async function seedSome(page: Page, count = 3) {
   // Hit the backend via the Vite proxy to ensure at least `count`
   // chassis exist before the table-visibility assertions run.
   const response = await page.request.post("/v1/demo/replay/start", {
