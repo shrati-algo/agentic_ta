@@ -45,6 +45,7 @@ def settings_for_test(tmp_path: Path) -> Settings:
         asymmetry_threshold_mm=0.15,
         queue_max_size=64,
         log_level="WARNING",
+        demo_enabled=True,
     )
 
 

@@ -49,7 +49,7 @@ format:
 	ruff check --fix src/ tests/
 
 build:
-	docker build -t tad:$$(git rev-parse --short HEAD) .
+	docker build -t tad:latest -t tad:$$(git rev-parse --short HEAD) .
 
 # ---- Frontend ------------------------------------------------------------
 

@@ -61,6 +61,7 @@ def main() -> None:
         default_calibration_left=str(configs / "calibration" / "cal-2026-03-14-L.yaml"),
         default_calibration_right=str(configs / "calibration" / "cal-2026-03-14-R.yaml"),
         log_level="INFO",
+        demo_enabled=True,
     )
 
     # Demo-friendly algo params.  Targeted at the yca_valid fixture set

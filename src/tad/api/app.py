@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from tad.api.errors import register_exception_handlers
-from tad.api.middleware import RequestIdMiddleware
+from tad.api.middleware import RequestIdMiddleware, ServiceTokenMiddleware
 from tad.api.routes_chassis import router as chassis_router
 from tad.api.routes_dashboard import router as dashboard_router
 from tad.api.routes_demo import router as demo_router
@@ -95,6 +95,12 @@ def create_app(
         description="Classical CV dimensional measurement service",
         version="0.1.0",
     )
+    # Order matters: ServiceTokenMiddleware must run BEFORE the
+    # RequestIdMiddleware so the 401 response carries a request_id we
+    # bind here. Starlette runs middlewares in reverse registration
+    # order, so add the auth layer first.
+    if settings.auth_enabled:
+        app.add_middleware(ServiceTokenMiddleware, allowed=settings.allowed_tokens())
     app.add_middleware(RequestIdMiddleware)
     register_exception_handlers(app)
 
@@ -114,7 +120,10 @@ def create_app(
     app.include_router(chassis_router)
     app.include_router(dashboard_router)
     app.include_router(meas_router)
-    app.include_router(demo_router)
+    # Demo replay router is gated: production images should set
+    # DEMO_ENABLED=false so the /v1/demo/* surface returns 404.
+    if settings.demo_enabled:
+        app.include_router(demo_router)
 
     _mount_frontend(app)
 
@@ -144,6 +153,14 @@ def _mount_frontend(app: FastAPI) -> None:
         # API paths are handled by their routers above; anything
         # that reaches this handler is a client-side route or an
         # asset that doesn't exist in /assets (e.g. favicon).
+        #
+        # Guard-rail: unmounted /v1/* should surface as 404 rather
+        # than the UI index -- otherwise disabling the demo router
+        # (STORY-11.2) silently serves index.html to the probe.
+        if full_path.startswith("v1/"):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404)
         candidate = dist / full_path
         if full_path and candidate.is_file():
             return FileResponse(candidate)

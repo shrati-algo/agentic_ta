@@ -1,39 +1,8 @@
 services:
-  # --------- Primary app: single-port demo-mode TAD -----------------
-  # Builds the image from the local Dockerfile, then boots the
-  # in-memory demo (API + UI + replay) on http://localhost:8000.
-  #
-  #     docker compose up --build     # first time / after code changes
-  #     docker compose up             # subsequent runs
-  #
-  # Open http://localhost:8000 in your browser -- that's the whole app.
-  tad:
-    build: .
-    image: tad:latest
-    container_name: tad-app
-    ports:
-      - "8000:8000"
-    volumes:
-      # The yca_valid replay fixtures (859MB) live outside the image.
-      # Mounting them keeps the image slim and lets you swap fixture
-      # sets without rebuilding.
-      - ./tests/fixtures/test_images:/app/tests/fixtures/test_images:ro
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 20s
-
-  # --------- Production-mode dependencies (not required for demo) ----
-  # Left here for Phase 7+ work when the production entrypoint
-  # (tad.main:app) needs a real database and object store.  Start
-  # them on demand with:
-  #     docker compose up -d postgres minio
+  # --------- Postgres: durable session / measurement / chassis store ----
   postgres:
     image: postgres:16
-    profiles: ["prod"]
+    container_name: tad-postgres
     environment:
       POSTGRES_USER: tad
       POSTGRES_PASSWORD: tad
@@ -42,19 +11,92 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tad -d tad"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
 
+  # --------- MinIO: S3-compatible blob store for annotated debug JPEGs --
   minio:
     image: minio/minio
-    profiles: ["prod"]
+    container_name: tad-minio
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9000:9000"  # S3 API
+      - "9001:9001"  # web console
     volumes:
       - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # --------- TAD application: FastAPI + SPA on :8000 --------------------
+  # Production wiring (EPIC-11): tad.main:app with SQL repositories +
+  # MinIO blob store. Migrations run once at boot via alembic upgrade
+  # head; after that the uvicorn process takes over. DEMO_ENABLED=true
+  # keeps /v1/demo/* mounted so the dashboard's auto-replay populates
+  # the DB with real measurements from the yca_valid fixtures -- flip
+  # it to false for a true production deploy.
+  tad:
+    build: .
+    image: tad:latest
+    container_name: tad-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      DB_DSN: postgresql+psycopg://tad:tad@postgres:5432/tad
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: tad-debug
+      IMAGES_LEFT_DIR: /tmp/tad/images/left
+      IMAGES_RIGHT_DIR: /tmp/tad/images/right
+      ALGO_PARAMS_VERSION: algo-1.3.0
+      DEFAULT_CALIBRATION_LEFT: configs/calibration/cal-2026-03-14-L.yaml
+      DEFAULT_CALIBRATION_RIGHT: configs/calibration/cal-2026-03-14-R.yaml
+      ASYMMETRY_THRESHOLD_MM: "2.5"
+      QUEUE_MAX_SIZE: "256"
+      LOG_LEVEL: INFO
+      AUTH_ENABLED: "false"
+      SERVICE_TOKENS: ""
+      DEMO_ENABLED: "true"
+    volumes:
+      # The yca_valid replay fixtures (859MB) live outside the image.
+      # Mounted read-only so the replay router can iterate pairs.
+      - ./tests/fixtures/test_images:/app/tests/fixtures/test_images:ro
+    # Run migrations then hand off to uvicorn. If alembic fails, the
+    # container exits rather than serving against a stale schema.
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        echo "[tad] running alembic upgrade head..."
+        alembic upgrade head
+        echo "[tad] starting uvicorn..."
+        exec uvicorn tad.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
 
 volumes:
   pgdata:

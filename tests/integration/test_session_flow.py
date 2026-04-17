@@ -93,6 +93,7 @@ def e2e_app(tmp_path: Path):  # type: ignore[no-untyped-def]
         default_calibration_left=str(CONFIGS / "calibration" / "cal-2026-03-14-L.yaml"),
         default_calibration_right=str(CONFIGS / "calibration" / "cal-2026-03-14-R.yaml"),
         log_level="WARNING",
+        demo_enabled=True,
     )
 
     app = create_app(
