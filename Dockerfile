@@ -33,6 +33,9 @@ RUN pip install --no-cache-dir .
 COPY src/ src/
 COPY configs/ configs/
 COPY scripts/ scripts/
+# alembic.ini so migrations can be run from the container:
+#     docker compose exec tad alembic upgrade head
+COPY alembic.ini ./
 
 # run_demo.py wires the in-memory repository fakes that live under tests/
 # (tests/fakes.py + tests/__init__.py). The bulky tests/fixtures/test_images
@@ -47,6 +50,13 @@ COPY --from=frontend /build/dist /app/frontend/dist
 
 RUN chown -R tad:tad /app
 USER tad
+
+# `pip install .` above only resolved the dependency wheels -- make the
+# 'tad' package itself importable without re-running hatchling on every
+# rebuild. scripts/run_demo.py already inserts this path at runtime;
+# setting it here also lets `alembic` (and any one-off `python -m tad.*`
+# invocation) work inside the container.
+ENV PYTHONPATH=/app/src
 
 EXPOSE 8000
 
