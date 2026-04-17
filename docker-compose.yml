@@ -1,6 +1,39 @@
 services:
+  # --------- Primary app: single-port demo-mode TAD -----------------
+  # Builds the image from the local Dockerfile, then boots the
+  # in-memory demo (API + UI + replay) on http://localhost:8000.
+  #
+  #     docker compose up --build     # first time / after code changes
+  #     docker compose up             # subsequent runs
+  #
+  # Open http://localhost:8000 in your browser -- that's the whole app.
+  tad:
+    build: .
+    image: tad:latest
+    container_name: tad-app
+    ports:
+      - "8000:8000"
+    volumes:
+      # The yca_valid replay fixtures (859MB) live outside the image.
+      # Mounting them keeps the image slim and lets you swap fixture
+      # sets without rebuilding.
+      - ./tests/fixtures/test_images:/app/tests/fixtures/test_images:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+
+  # --------- Production-mode dependencies (not required for demo) ----
+  # Left here for Phase 7+ work when the production entrypoint
+  # (tad.main:app) needs a real database and object store.  Start
+  # them on demand with:
+  #     docker compose up -d postgres minio
   postgres:
     image: postgres:16
+    profiles: ["prod"]
     environment:
       POSTGRES_USER: tad
       POSTGRES_PASSWORD: tad
@@ -12,6 +45,7 @@ services:
 
   minio:
     image: minio/minio
+    profiles: ["prod"]
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
