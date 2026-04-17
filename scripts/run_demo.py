@@ -63,9 +63,19 @@ def main() -> None:
         log_level="INFO",
     )
 
-    # Demo-friendly algo params: relax target to 20 mm so both the
-    # committed real fixtures (cam18jdleofhtlhj6_{L,R}.jpg ~ 19.8 mm)
-    # and the synthetic seed images produced by `make demo-seed` detect.
+    # Demo-friendly algo params.  Targeted at the yca_valid fixture set
+    # (real bushings measure ~18-22 mm here) so the dashboard shows a
+    # proper mix of PASS / REVIEW / FAIL instead of one flat colour.
+    #
+    # Per-camera classification (evaluate_status):
+    #   |d - target| <= ok_band_mm        (1.0 mm)  -> PASS   (Okay)
+    #   |d - target| <= somewhat_ok_band  (1.5 mm)  -> REVIEW (Somewhat Okay)
+    #   outside that window                         -> FAIL   (Not Okay)
+    #
+    # Chassis-level combination (aggregator.combine_status):
+    #   worst of (left_status, right_status) via the 4x4 matrix
+    #   then downgrade PASS -> REVIEW when
+    #   |d_left - d_right| > asymmetry_threshold_mm (2.5 mm).
     algo = load_algo_params(settings.algo_params_version, base_dir=configs / "algo_params")
     algo = algo.model_copy(
         update={
@@ -76,8 +86,9 @@ def main() -> None:
                 update={
                     "min_mm": 15.0,
                     "max_mm": 25.0,
-                    "ok_band_mm": 0.5,
-                    "somewhat_ok_band_mm": 2.0,
+                    "ok_band_mm": 1.0,
+                    "somewhat_ok_band_mm": 1.5,
+                    "asymmetry_threshold_mm": 2.5,
                 }
             ),
             "hough": algo.hough.model_copy(update={"param2": 15}),
