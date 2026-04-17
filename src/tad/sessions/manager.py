@@ -199,9 +199,7 @@ class SessionManager:
             if self._run_consumer:
                 stop_event = asyncio.Event()
                 self._stop_events[session_id] = stop_event
-                rt.consumer_task = asyncio.create_task(
-                    consumer_loop(rt, stop_event=stop_event)
-                )
+                rt.consumer_task = asyncio.create_task(consumer_loop(rt, stop_event=stop_event))
 
             self._active[session_id] = rt
 

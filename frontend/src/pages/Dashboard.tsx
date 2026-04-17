@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { getDashboardSummary } from "../api/dashboard";
+import { getReplayStatus, startReplay, type ReplayStatus } from "../api/demo";
 import type { DashboardSummary } from "../api/types";
 import { AlertsList } from "../components/AlertsList";
 import { FiltersBar, type Filters } from "../components/FiltersBar";
@@ -14,6 +15,42 @@ import { useLiveSession } from "../hooks/useLiveSession";
 
 export function Dashboard() {
   const { sessionId, connected, lastEvent } = useLiveSession();
+
+  // Demo replay: auto-start on first Dashboard mount --------------------
+  const [replay, setReplay] = useState<ReplayStatus | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const current = await getReplayStatus();
+        if (cancelled) return;
+        if (current.running) {
+          setReplay(current);
+          return;
+        }
+        const started = await startReplay({ interval_seconds: 20 });
+        if (!cancelled) setReplay(started);
+      } catch {
+        /* demo replay not available -- ignore silently */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Poll replay status every 5s so the banner stays fresh
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const s = await getReplayStatus();
+        setReplay(s);
+      } catch {
+        /* ignore */
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Filters ------------------------------------------------------------------
   const [filters, setFilters] = useState<Filters>({
@@ -65,6 +102,23 @@ export function Dashboard() {
     <div className="min-h-screen bg-slate-50">
       <Header connected={connected} sessionId={sessionId} />
       <main className="mx-auto max-w-7xl px-6 py-6">
+        {replay && replay.total_pairs > 0 && (
+          <div className="mb-4 flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-xs">
+            <span className="text-blue-900">
+              <span className="font-semibold">Demo replay:</span>{" "}
+              {replay.running ? "streaming" : "complete"} —{" "}
+              {replay.pairs_sent} / {replay.total_pairs} chassis sent at{" "}
+              {replay.interval_seconds}s intervals
+            </span>
+            {replay.running && (
+              <span className="flex items-center gap-1 text-blue-600">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
+                live
+              </span>
+            )}
+          </div>
+        )}
+
         {/* KPI row */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <KpiDonut

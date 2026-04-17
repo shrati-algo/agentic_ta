@@ -35,10 +35,10 @@ class TestSseBroker:
         # Fast subscriber drains between publishes; slow one doesn't.
         for i in range(5):
             await broker.publish(Event(type="camera_result", payload={"i": i}))
-            try:
+            import contextlib
+
+            with contextlib.suppress(asyncio.QueueEmpty):
                 q_fast.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
 
         # Slow subscriber is dropped; fast subscriber still registered.
         assert q_slow not in broker._subscribers

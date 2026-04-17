@@ -14,6 +14,7 @@ from tad.api.errors import register_exception_handlers
 from tad.api.middleware import RequestIdMiddleware
 from tad.api.routes_chassis import router as chassis_router
 from tad.api.routes_dashboard import router as dashboard_router
+from tad.api.routes_demo import router as demo_router
 from tad.api.routes_health import router as health_router
 from tad.api.routes_measurements import router as meas_router
 from tad.api.routes_sessions import router as sessions_router
@@ -111,6 +112,7 @@ def create_app(
     app.include_router(chassis_router)
     app.include_router(dashboard_router)
     app.include_router(meas_router)
+    app.include_router(demo_router)
     return app
 
 
