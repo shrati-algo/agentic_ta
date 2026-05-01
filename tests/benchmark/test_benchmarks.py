@@ -1,4 +1,5 @@
 """Benchmark suite — wraps the locked eval harness in pytest."""
+
 import csv
 from pathlib import Path
 
