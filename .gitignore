@@ -28,8 +28,11 @@ ENV/
 .claude/
 
 # Project-specific ignores (CLAUDE.md: never commit these)
-/data/
 /models/
+
+# data/: only ignore runtime drop folder; tracked README + reference + samples
+data/input/*
+!data/input/.gitkeep
 
 # Test / coverage
 .coverage
@@ -58,3 +61,9 @@ notebooks/.ipynb_checkpoints/
 .python-version
 frontend/test-results/
 frontend/playwright-report/
+
+# Reports (per-run benchmark logs)
+reports/benchmark/run-*.log
+
+# Frontend artifacts (regenerated)
+frontend/node_modules/

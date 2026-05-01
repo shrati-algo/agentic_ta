@@ -1,5 +1,10 @@
-.PHONY: up down migrate seed serve demo demo-seed test test-unit test-integration eval lint format build \
+.PHONY: setup up down migrate seed serve run demo demo-seed test test-unit test-integration eval bench lint format build clean \
         dev-ui install-ui test-ui build-ui
+
+setup:
+	pip install -e ".[dev]"
+
+run: serve
 
 up:
 	docker compose up -d
@@ -38,6 +43,19 @@ test-integration:
 
 eval:
 	python -m tad.evals.eval
+
+bench: ## Run benchmark suite and write report
+	@mkdir -p reports/benchmark
+	@ts=$$(date -u +%Y%m%dT%H%M%SZ); \
+	  pytest tests/benchmark -v --tb=short \
+	  | tee reports/benchmark/run-$${ts}.log
+	@echo "Report log -> reports/benchmark/run-*.log"
+	@echo "Fill TEMPLATE.md and save as reports/benchmark/<run-id>.md"
+
+clean:
+	rm -rf .pytest_cache .ruff_cache .mypy_cache .coverage coverage.xml htmlcov
+	find . -name __pycache__ -type d -not -path './.git/*' -not -path './_archive/*' -exec rm -rf {} + 2>/dev/null || true
+	find . -name '*.egg-info' -type d -not -path './.git/*' -not -path './_archive/*' -exec rm -rf {} + 2>/dev/null || true
 
 lint:
 	ruff check src/ tests/
