@@ -18,9 +18,9 @@ This is the project memory file. Read this first in every session. Every sprint,
 ## Critical rules
 
 ### Always
-- Keep the measurement pipeline (`src/tad/measurement/`) **pure** — no DB, no logging beyond debug, no filesystem, no sessions. It takes an image and returns a result.
+- Keep the measurement pipeline (`src/tad/processing/`) **pure** — no DB, no logging beyond debug, no filesystem, no sessions. It takes an image and returns a result.
 - Pin versions in `configs/algo_params/<version>.yaml`. **Never** edit an existing version; bump to a new one (`algo-1.3.0` → `algo-1.4.0`) and add an ADR.
-- Parse the chassis number from the **filename** using `src/tad/data/filename_parser.py`. The regex is the contract — do not change it without coordinating with Plant Engineering and adding an ADR.
+- Parse the chassis number from the **filename** using `src/tad/ingestion/filename_parser.py`. The regex is the contract — do not change it without coordinating with Plant Engineering and adding an ADR.
 - Use `asyncio.to_thread(...)` for CV work in async routes. OpenCV releases the GIL, so this gives real parallelism.
 - Write to Postgres and MinIO **only** through the repository classes in `src/tad/persistence/repositories.py`.
 - Use `structlog` for all logs. Every log record should carry `session_id`, `measurement_id`, `chassis_no`, and `camera_side` where applicable.
@@ -76,9 +76,9 @@ src/tad/                    # the package
 src/tad/main.py             # uvicorn entrypoint
 src/tad/config/             # Settings, AlgoParams, Calibration loaders
 src/tad/api/                # FastAPI app, routes, schemas, SSE
-src/tad/sessions/           # manager, runtime, consumer, aggregator, watcher, broker
-src/tad/data/               # filename_parser, image_validator, safe_read
-src/tad/measurement/        # PURE CV pipeline — no I/O
+src/tad/workers/            # manager, runtime, consumer, aggregator, watcher, broker
+src/tad/ingestion/          # filename_parser, image_validator, safe_read
+src/tad/processing/        # PURE CV pipeline — no I/O
                             # preprocessing.py, threshold.py, contour_detect.py,
                             # confidence.py, annotate.py, pipeline.py, models.py
 src/tad/persistence/        # SQLAlchemy models, repositories, MinIO store, migrations
@@ -201,14 +201,14 @@ curl -X POST http://localhost:8000/v1/sessions/start \
 - Unit tests must not reach the network or start containers.
 - Integration tests may use the local Postgres + MinIO via `docker-compose`. Skip them with `-m "not integration"` when offline.
 - Every bug fix ships with a test that would have caught it.
-- The eval harness (`make eval`) is the final gate for any change to `src/tad/measurement/` or `configs/algo_params/`. A PR that regresses MAE fails CI.
+- The eval harness (`make eval`) is the final gate for any change to `src/tad/processing/` or `configs/algo_params/`. A PR that regresses MAE fails CI.
 
 ### Test layout
 ```
 tests/unit/                 # fast, no network, no containers
 tests/integration/          # real Postgres + MinIO, local watcher
 tests/fixtures/             # images, YAMLs, database seeds
-tests/eval/                 # the locked eval set (DVC-tracked or committed)
+tests/benchmark/            # the locked eval set + accuracy gates (was tests/eval/)
 ```
 
 ---
@@ -256,7 +256,7 @@ tests/eval/                 # the locked eval set (DVC-tracked or committed)
 3. Never inline SQL outside the repository. If a raw query is needed, put it behind a method.
 
 ### Adding a new pipeline stage
-1. Place it in its own file under `src/tad/measurement/`.
+1. Place it in its own file under `src/tad/processing/`.
 2. Keep the function signature `f(image_or_intermediate, params) -> next_intermediate`. **No I/O.**
 3. Add it to `pipeline.py` with a named step.
 4. Write unit tests with synthetic inputs.
@@ -291,7 +291,7 @@ tests/eval/                 # the locked eval set (DVC-tracked or committed)
   - `docs(adr): add ADR-007 for asymmetry threshold bump`
   - `test(aggregator): cover orphan-chassis flush path`
   - `chore(deps): bump opencv-python to 4.10.0.84`
-- **PRs:** Small, focused. One logical change per PR. If a PR touches `src/tad/measurement/` or `configs/algo_params/`, paste the `make eval` output in the description.
+- **PRs:** Small, focused. One logical change per PR. If a PR touches `src/tad/processing/` or `configs/algo_params/`, paste the `make eval` output in the description.
 
 ---
 

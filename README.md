@@ -11,7 +11,7 @@ classical CV (adaptive threshold → contours → masked Hough). See
 [ADR-008](docs/decisions/ADR-008.md) for the rationale and the
 algorithm switch.
 
-![architecture](docs/architecture_diagram.md "Flow diagrams live here")
+![architecture](docs/TRD.md#architecture "Architecture lives in TRD")
 
 ## Run the demo in 5 minutes
 
@@ -43,7 +43,7 @@ photo, detected circle overlay, status pill, Correct/Incorrect decision
 buttons, flag toggle, and JSON download.
 
 For the full walkthrough with screenshots and troubleshooting, see
-[`docs/demo_walkthrough.md`](docs/demo_walkthrough.md).
+[`docs/extras/demo_walkthrough.md`](docs/extras/demo_walkthrough.md).
 
 ## Build and test
 
@@ -90,11 +90,11 @@ make demo                       # one server on :8000 serves both
   wins. Classification into PASS / REVIEW / FAIL is band-based; no
   stochastic sampling anywhere.
 
-Full flow diagrams:
-[`docs/architecture_diagram.md`](docs/architecture_diagram.md)
-(12 Mermaid diagrams covering system, runtime, session lifecycle,
-per-image pipeline, CV stages, classification tree, aggregation,
-SSE, demo replay, frontend tree, data model, deployment).
+Full flow diagrams: see the **Architecture** section of
+[`docs/TRD.md`](docs/TRD.md) (12 Mermaid diagrams covering system,
+runtime, session lifecycle, per-image pipeline, CV stages,
+classification tree, aggregation, SSE, demo replay, frontend tree,
+data model, deployment).
 
 ## Project layout
 
@@ -102,17 +102,17 @@ SSE, demo replay, frontend tree, data model, deployment).
 tad/
 ├── src/tad/               # Python backend
 │   ├── api/               # FastAPI routers + schemas
-│   ├── sessions/          # SessionManager, watchers, aggregator, broker
-│   ├── measurement/       # pure CV pipeline (ADR-008)
-│   ├── data/              # filename parser, image validator
+│   ├── workers/           # SessionManager, watchers, aggregator, broker
+│   ├── processing/        # pure CV pipeline (ADR-008)
+│   ├── ingestion/         # filename parser, image validator
 │   ├── persistence/       # SQLAlchemy + MinIO + in-memory fakes
 │   ├── config/            # Settings, AlgoParams, Calibration loaders
 │   └── evals/             # locked eval harness
 ├── frontend/              # React SPA (Phase 5)
 ├── tests/
-│   ├── unit/              # 96 backend unit tests
-│   ├── integration/       # 49 backend HTTP + session-flow tests
-│   ├── eval/              # locked eval dataset
+│   ├── unit/              # backend unit tests
+│   ├── integration/       # backend HTTP + session-flow tests
+│   ├── benchmark/         # locked eval dataset + accuracy gates
 │   └── fixtures/          # committed images + calibration YAMLs
 ├── scripts/
 │   ├── run_demo.py        # in-memory boot, no Docker (ADR-009)
@@ -120,12 +120,9 @@ tad/
 │   └── ...
 ├── configs/               # algo_params/algo-1.3.0.yaml + calibrations
 └── docs/
-    ├── architecture.txt
-    ├── architecture_diagram.md
-    ├── api.md
-    ├── demo_walkthrough.md
-    ├── trd_doc.txt / prd_doc.txt / user_stories.txt
-    └── decisions/         # ADR-001 through ADR-009
+    ├── BRD.md / PRD.md / TRD.md / RUNBOOK.md / ALGO_CARD.md
+    ├── decisions/         # ADR-001 through ADR-009
+    └── extras/            # legacy + non-canonical docs (api, demo walkthrough, etc.)
 ```
 
 ## Core commands
@@ -148,18 +145,18 @@ tad/
 
 ## Documentation
 
-- [`docs/demo_walkthrough.md`](docs/demo_walkthrough.md) —
-  **start here** for end-to-end testing
-- [`docs/api.md`](docs/api.md) — HTTP API reference with curl examples
-- [`docs/architecture_diagram.md`](docs/architecture_diagram.md) —
-  visual flow diagrams
-- [`docs/architecture.txt`](docs/architecture.txt) — full build guide
-- [`docs/trd_doc.txt`](docs/trd_doc.txt) — normative requirements
-- [`docs/prd_doc.txt`](docs/prd_doc.txt) — user stories and product context
-- [`docs/decisions/`](docs/decisions/) — 9 Architecture Decision Records
+- [`docs/BRD.md`](docs/BRD.md) — business requirements (the WHY)
+- [`docs/PRD.md`](docs/PRD.md) — product requirements (user stories,
+  acceptance)
+- [`docs/TRD.md`](docs/TRD.md) — technical requirements (includes
+  architecture diagrams)
+- [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — deploy / operate / troubleshoot
+- [`docs/ALGO_CARD.md`](docs/ALGO_CARD.md) — algorithm card (params, limits)
+- [`docs/decisions/`](docs/decisions/) — Architecture Decision Records
+- [`docs/extras/`](docs/extras/) — non-canonical docs (api.md,
+  demo_walkthrough.md, PLAN.md, legacy architecture)
 - [`CLAUDE.md`](CLAUDE.md) — project memory file (critical rules +
   conventions + gotchas)
-- [`PLAN.md`](PLAN.md) — phase-by-phase implementation plan
 
 ## License
 

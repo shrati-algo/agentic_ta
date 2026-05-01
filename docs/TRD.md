@@ -4626,3 +4626,8 @@ Key differences:
 - [ADR-001](decisions/ADR-001.md) — classical CV only, no ML
 - [ADR-008](decisions/ADR-008.md) — switch to contour + masked Hough (algo-1.3.0)
 - [ADR-009](decisions/ADR-009.md) — demo-mode infrastructure (this doc's diagram 9)
+
+
+## API
+
+See [`docs/extras/api.md`](extras/api.md) for the full HTTP endpoint reference.
