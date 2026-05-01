@@ -28,8 +28,8 @@ from tad.config.algo_params import load_algo_params
 from tad.config.calibration import load_calibration
 from tad.config.settings import Settings
 from tad.persistence.blob_store import InMemoryBlobStore
-from tad.sessions.consumer import process_item
-from tad.sessions.watcher import QueueItem
+from tad.workers.consumer import process_item
+from tad.workers.watcher import QueueItem
 from tests.fakes import (
     InMemoryChassisRepository,
     InMemoryMeasurementRepository,

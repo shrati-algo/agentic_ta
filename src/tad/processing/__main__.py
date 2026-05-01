@@ -1,4 +1,4 @@
-"""CLI entry point: ``python -m tad.measurement <image> <calibration_yaml>``.
+"""CLI entry point: ``python -m tad.processing <image> <calibration_yaml>``.
 
 Runs the measurement pipeline on a single image and prints the result.
 Useful for quick manual testing and debugging.
@@ -13,13 +13,13 @@ import cv2
 
 from tad.config.algo_params import load_algo_params
 from tad.config.calibration import load_calibration
-from tad.measurement.models import PipelineInput
-from tad.measurement.pipeline import measure_innermost_diameter
+from tad.processing.models import PipelineInput
+from tad.processing.pipeline import measure_innermost_diameter
 
 
 def main() -> None:
     if len(sys.argv) < 3:
-        print("Usage: python -m tad.measurement <image_path> <calibration_yaml>")
+        print("Usage: python -m tad.processing <image_path> <calibration_yaml>")
         print("  Optional: pass algo_params version as 3rd arg (default: algo-1.3.0)")
         sys.exit(1)
 

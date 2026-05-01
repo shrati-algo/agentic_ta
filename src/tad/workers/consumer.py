@@ -20,15 +20,15 @@ from uuid import uuid4
 import cv2
 
 from tad.api.errors import BadFilename
-from tad.data.filename_parser import parse_filename
-from tad.data.image_validator import validate_image
-from tad.data.safe_read import wait_for_stable
-from tad.measurement.models import PipelineInput
-from tad.measurement.pipeline import measure_innermost_diameter
+from tad.ingestion.filename_parser import parse_filename
+from tad.ingestion.image_validator import validate_image
+from tad.ingestion.safe_read import wait_for_stable
 from tad.persistence.models import MeasurementRow
-from tad.sessions.broker import Event
-from tad.sessions.runtime import SessionRuntime
-from tad.sessions.watcher import QueueItem
+from tad.processing.models import PipelineInput
+from tad.processing.pipeline import measure_innermost_diameter
+from tad.workers.broker import Event
+from tad.workers.runtime import SessionRuntime
+from tad.workers.watcher import QueueItem
 
 
 async def consumer_loop(rt: SessionRuntime, *, stop_event: asyncio.Event) -> None:

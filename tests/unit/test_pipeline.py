@@ -1,4 +1,4 @@
-"""Tests for tad.measurement.pipeline -- the full orchestrator."""
+"""Tests for tad.processing.pipeline -- the full orchestrator."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ import cv2
 import numpy as np
 import pytest
 
-from tad.measurement.models import PipelineInput, PipelineOutput
-from tad.measurement.pipeline import measure_innermost_diameter
+from tad.processing.models import PipelineInput, PipelineOutput
+from tad.processing.pipeline import measure_innermost_diameter
 
 IMAGES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "images"
 

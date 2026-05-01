@@ -20,6 +20,7 @@ can be restored if anything was misclassified as cruft.
 | fixtures_images_archived/cam18jdleofhtlhj6_L_measured.jpg | tests/fixtures/images/ | Output of archived estimate_real_diameters.py |
 | fixtures_images_archived/cam18jdleofhtlhj6_R_measured.jpg | tests/fixtures/images/ | Output of archived estimate_real_diameters.py |
 | tests_fixtures_calibration_empty/calibration | tests/fixtures/calibration | Empty placeholder; real calibration lives in configs/calibration/ |
+| tests_eval_empty/ | tests/eval/ | Empty after dataset.csv was moved to tests/benchmark/ in Phase D |
 
 NOTE: PLAN.md is moved separately to `docs/extras/PLAN.md` in Phase C
 (it stays inside `docs/` because it is a doc, not cruft).

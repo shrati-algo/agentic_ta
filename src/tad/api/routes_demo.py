@@ -19,8 +19,8 @@ from pydantic import BaseModel
 
 from tad.api.deps import get_session_manager
 from tad.api.errors import TadError
-from tad.sessions.manager import SessionManager
-from tad.sessions.runtime import SessionRuntime
+from tad.workers.manager import SessionManager
+from tad.workers.runtime import SessionRuntime
 
 router = APIRouter(prefix="/v1/demo", tags=["demo"])
 
@@ -76,7 +76,7 @@ def _gen_chassis_no(index: int) -> str:
 
     Uses a fixed ``DMAX`` prefix plus the zero-padded index so runs are
     reproducible and easy to spot in the UI.  No I / O / Q anywhere
-    (VIN-format requirement — see tad.data.filename_parser).
+    (VIN-format requirement — see tad.ingestion.filename_parser).
     """
     prefix = "DMAX"  # 4 chars, no I/O/Q
     idx = max(0, int(index))
@@ -219,7 +219,7 @@ async def _replay_loop(
 async def _drive_one(rt: SessionRuntime, side: str, path: Path) -> None:
     """Inline copy of the consumer pipeline for the replay task.
 
-    This is kept separate from :func:`tad.sessions.consumer.process_item`
+    This is kept separate from :func:`tad.workers.consumer.process_item`
     because the replay needs to (a) bypass the watchdog observer on
     Windows and (b) feed measurements straight into the in-memory repo
     without going through a queue.
@@ -231,12 +231,12 @@ async def _drive_one(rt: SessionRuntime, side: str, path: Path) -> None:
     import cv2 as _cv2
 
     from tad.api.errors import BadFilename
-    from tad.data.filename_parser import parse_filename
-    from tad.data.image_validator import validate_image
-    from tad.measurement.models import PipelineInput
-    from tad.measurement.pipeline import measure_innermost_diameter
+    from tad.ingestion.filename_parser import parse_filename
+    from tad.ingestion.image_validator import validate_image
     from tad.persistence.models import MeasurementRow
-    from tad.sessions.broker import Event
+    from tad.processing.models import PipelineInput
+    from tad.processing.pipeline import measure_innermost_diameter
+    from tad.workers.broker import Event
 
     del side  # parsed below
     try:

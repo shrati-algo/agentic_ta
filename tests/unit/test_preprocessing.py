@@ -1,11 +1,11 @@
-"""Tests for tad.measurement.preprocessing."""
+"""Tests for tad.processing.preprocessing."""
 
 from __future__ import annotations
 
 import cv2
 import numpy as np
 
-from tad.measurement.preprocessing import clahe, gaussian_blur
+from tad.processing.preprocessing import clahe, gaussian_blur
 
 
 class TestCLAHE:

@@ -1,7 +1,7 @@
 """Contour-driven circle detection.
 
 Replaces the pick-innermost-then-RANSAC approach.  The binary mask from
-:mod:`tad.measurement.threshold` is decomposed into external contours.
+:mod:`tad.processing.threshold` is decomposed into external contours.
 We iterate the contours from largest to smallest and, for each, build
 a mask and run a target-constrained :func:`cv2.HoughCircles`.  The
 first contour that yields a circle whose radius lies within
@@ -24,7 +24,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from tad.measurement.models import InnerCircle
+from tad.processing.models import InnerCircle
 
 
 def find_candidate_contours(

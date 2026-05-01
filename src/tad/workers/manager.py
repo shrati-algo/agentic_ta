@@ -29,11 +29,11 @@ from tad.persistence.repositories import (
     MeasurementRepository,
     SessionRepository,
 )
-from tad.sessions.aggregator import Aggregator
-from tad.sessions.broker import Event, SseBroker
-from tad.sessions.consumer import consumer_loop
-from tad.sessions.runtime import SessionRuntime
-from tad.sessions.watcher import FolderWatcher, QueueItem
+from tad.workers.aggregator import Aggregator
+from tad.workers.broker import Event, SseBroker
+from tad.workers.consumer import consumer_loop
+from tad.workers.runtime import SessionRuntime
+from tad.workers.watcher import FolderWatcher, QueueItem
 
 
 class SessionManager:

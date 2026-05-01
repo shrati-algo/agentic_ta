@@ -1,4 +1,4 @@
-"""Tests for tad.data.image_validator."""
+"""Tests for tad.ingestion.image_validator."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from tad.data.image_validator import validate_image
+from tad.ingestion.image_validator import validate_image
 
 IMAGES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "images"
 

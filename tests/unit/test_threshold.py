@@ -1,4 +1,4 @@
-"""Tests for tad.measurement.threshold."""
+"""Tests for tad.processing.threshold."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from tad.measurement.threshold import adaptive_threshold, morph_close
+from tad.processing.threshold import adaptive_threshold, morph_close
 
 
 class TestAdaptiveThreshold:

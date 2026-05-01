@@ -1,4 +1,4 @@
-"""Tests for tad.measurement.contour_detect."""
+"""Tests for tad.processing.contour_detect."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from tad.measurement.contour_detect import (
+from tad.processing.contour_detect import (
     _radius_bounds_px,
     detect_circle,
     detect_circle_in_contour,

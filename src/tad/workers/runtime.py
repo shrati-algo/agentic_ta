@@ -21,11 +21,11 @@ from tad.persistence.repositories import (
     MeasurementRepository,
     SessionRepository,
 )
-from tad.sessions.aggregator import Aggregator
-from tad.sessions.broker import SseBroker
+from tad.workers.aggregator import Aggregator
+from tad.workers.broker import SseBroker
 
 if TYPE_CHECKING:
-    from tad.sessions.watcher import FolderWatcher, QueueItem
+    from tad.workers.watcher import FolderWatcher, QueueItem
 else:
     QueueItem = "QueueItem"  # type: ignore[assignment]
     FolderWatcher = "FolderWatcher"  # type: ignore[assignment]

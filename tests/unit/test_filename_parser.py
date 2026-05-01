@@ -1,11 +1,11 @@
-"""Tests for tad.data.filename_parser."""
+"""Tests for tad.ingestion.filename_parser."""
 
 from __future__ import annotations
 
 import pytest
 
 from tad.api.errors import BadFilename
-from tad.data.filename_parser import ParsedName, parse_filename
+from tad.ingestion.filename_parser import ParsedName, parse_filename
 
 
 class TestParseFilename:

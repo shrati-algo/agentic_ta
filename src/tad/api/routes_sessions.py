@@ -22,7 +22,7 @@ from tad.api.schemas import (
     StopResponse,
 )
 from tad.persistence.repositories import MeasurementRepository, SessionRepository
-from tad.sessions.manager import SessionManager
+from tad.workers.manager import SessionManager
 
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
 

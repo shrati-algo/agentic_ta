@@ -1,4 +1,4 @@
-"""Tests for tad.sessions.aggregator — status matrix, asymmetry, orphan flush."""
+"""Tests for tad.workers.aggregator — status matrix, asymmetry, orphan flush."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from tad.persistence.models import MeasurementRow
-from tad.sessions.aggregator import Aggregator, combine_status
+from tad.workers.aggregator import Aggregator, combine_status
 from tests.fakes import InMemoryChassisRepository
 
 

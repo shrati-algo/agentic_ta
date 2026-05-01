@@ -23,12 +23,12 @@ from __future__ import annotations
 
 import cv2
 
-from tad.measurement.annotate import render_debug_image
-from tad.measurement.confidence import compute_confidence, evaluate_status
-from tad.measurement.contour_detect import detect_circle
-from tad.measurement.models import PipelineInput, PipelineOutput
-from tad.measurement.preprocessing import gaussian_blur
-from tad.measurement.threshold import adaptive_threshold, morph_close
+from tad.processing.annotate import render_debug_image
+from tad.processing.confidence import compute_confidence, evaluate_status
+from tad.processing.contour_detect import detect_circle
+from tad.processing.models import PipelineInput, PipelineOutput
+from tad.processing.preprocessing import gaussian_blur
+from tad.processing.threshold import adaptive_threshold, morph_close
 
 
 def measure_innermost_diameter(inp: PipelineInput) -> PipelineOutput:

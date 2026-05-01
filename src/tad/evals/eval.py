@@ -1,6 +1,6 @@
 """Locked eval harness for the classical CV measurement pipeline.
 
-Reads ``tests/eval/dataset.csv`` (columns: ``chassis_no``, ``image_path``,
+Reads ``tests/benchmark/dataset.csv`` (columns: ``chassis_no``, ``image_path``,
 ``side``, ``caliper_mm``, ``target_diameter_mm``, ``calibration``), runs
 each image through the pipeline, and reports MAE / P95 / max error vs
 caliper ground truth.
@@ -30,11 +30,11 @@ import numpy as np
 
 from tad.config.algo_params import load_algo_params
 from tad.config.calibration import load_calibration
-from tad.measurement.models import PipelineInput
-from tad.measurement.pipeline import measure_innermost_diameter
+from tad.processing.models import PipelineInput
+from tad.processing.pipeline import measure_innermost_diameter
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_DEFAULT_DATASET = _REPO_ROOT / "tests" / "eval" / "dataset.csv"
+_DEFAULT_DATASET = _REPO_ROOT / "tests" / "benchmark" / "dataset.csv"
 _CONFIGS = _REPO_ROOT / "configs"
 
 

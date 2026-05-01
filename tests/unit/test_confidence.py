@@ -1,8 +1,8 @@
-"""Tests for tad.measurement.confidence."""
+"""Tests for tad.processing.confidence."""
 
 from __future__ import annotations
 
-from tad.measurement.confidence import compute_confidence, evaluate_status
+from tad.processing.confidence import compute_confidence, evaluate_status
 
 
 class TestComputeConfidence:

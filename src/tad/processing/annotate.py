@@ -15,7 +15,7 @@ from typing import Any, Literal
 import cv2
 import numpy as np
 
-from tad.measurement.models import InnerCircle
+from tad.processing.models import InnerCircle
 
 # Colours (BGR)
 _GREEN = (0, 200, 0)

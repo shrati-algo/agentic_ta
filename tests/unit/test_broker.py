@@ -1,4 +1,4 @@
-"""Tests for tad.sessions.broker."""
+"""Tests for tad.workers.broker."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from tad.sessions.broker import Event, SseBroker
+from tad.workers.broker import Event, SseBroker
 
 
 class TestSseBroker:

@@ -1,4 +1,4 @@
-"""Tests for tad.data.safe_read."""
+"""Tests for tad.ingestion.safe_read."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tad.data.safe_read import wait_for_stable
+from tad.ingestion.safe_read import wait_for_stable
 
 
 class TestWaitForStable:

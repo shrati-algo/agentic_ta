@@ -30,7 +30,7 @@ from tad.persistence.repositories import (
     MeasurementRepository,
     SessionRepository,
 )
-from tad.sessions.manager import SessionManager
+from tad.workers.manager import SessionManager
 
 
 def create_app(
